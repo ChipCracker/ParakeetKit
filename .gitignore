@@ -1,0 +1,20 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Vendored / generated xcframework (regenerate via scripts/build-xcframework.sh)
+Frameworks/Parakeet.xcframework/
+
+# Release artifacts + llama.cpp/CrispASR clones
+dist/
+third_party/
+
+# Downloaded ASR models — but DO commit the bundled streaming VAD model.
+*.gguf
+!Sources/ParakeetKit/Resources/firered-stream-vad.gguf
+
+# macOS / Xcode
+.DS_Store
+DerivedData/
+xcuserdata/
