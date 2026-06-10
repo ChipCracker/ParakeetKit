@@ -22,15 +22,19 @@ public struct DiarizationOptions: Sendable {
     /// Windows shorter than this are not embedded (unstable embeddings).
     public var minEmbeddingSeconds: Double = 0.6
     public var threads: Int = 2
+    /// Run TitaNet/pyannote as ggml graphs on Metal. Default follows the
+    /// engine heuristic: GPU on devices, CPU in the simulator.
+    public var useGPU: Bool = ParakeetEngine.preferredUseGPU
 
     public init(mergeThreshold: Float = 0.5, maxSpeakers: Int = 8,
                 dbMatchThreshold: Float = 0.55, minEmbeddingSeconds: Double = 0.6,
-                threads: Int = 2) {
+                threads: Int = 2, useGPU: Bool = ParakeetEngine.preferredUseGPU) {
         self.mergeThreshold = mergeThreshold
         self.maxSpeakers = max(1, maxSpeakers)
         self.dbMatchThreshold = dbMatchThreshold
         self.minEmbeddingSeconds = minEmbeddingSeconds
         self.threads = threads
+        self.useGPU = useGPU
     }
 }
 
@@ -59,10 +63,12 @@ public actor Diarizer {
                             speakerDBDirectory: URL? = nil,
                             options: DiarizationOptions = .init()) async throws -> Diarizer {
         let embedder = try await SpeakerEmbedder.make(modelPath: titanetModelPath,
-                                                      threads: options.threads)
+                                                      threads: options.threads,
+                                                      useGPU: options.useGPU)
         var segmenter: PyannoteSegmenter? = nil
         if let path = pyannoteModelPath {
-            segmenter = try await PyannoteSegmenter.make(modelPath: path, threads: options.threads)
+            segmenter = try await PyannoteSegmenter.make(modelPath: path, threads: options.threads,
+                                                         useGPU: options.useGPU)
         }
         let db = try speakerDBDirectory.map { try SpeakerDB(directory: $0) }
         return Diarizer(embedder: embedder, segmenter: segmenter, db: db, options: options)

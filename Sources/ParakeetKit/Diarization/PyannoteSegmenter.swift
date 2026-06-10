@@ -13,8 +13,11 @@ import CParakeet
 public actor PyannoteSegmenter {
     private let ctx: OpaquePointer
 
-    public init(modelPath: String, threads: Int = 2) throws {
-        guard let ctx = pyannote_seg_init(modelPath, Int32(threads)) else {
+    /// `useGPU` runs front-end, per-layer LSTM input GEMMs and the classifier
+    /// head as ggml graphs on Metal; only the sequential LSTM recurrence stays
+    /// on CPU (turn-level outputs match the CPU reference).
+    public init(modelPath: String, threads: Int = 2, useGPU: Bool = false) throws {
+        guard let ctx = pyannote_seg_init_ex(modelPath, Int32(threads), useGPU) else {
             throw ParakeetError.modelLoadFailed(modelPath)
         }
         self.ctx = ctx
@@ -24,9 +27,10 @@ public actor PyannoteSegmenter {
         pyannote_seg_free(ctx)
     }
 
-    public static func make(modelPath: String, threads: Int = 2) async throws -> PyannoteSegmenter {
+    public static func make(modelPath: String, threads: Int = 2,
+                            useGPU: Bool = false) async throws -> PyannoteSegmenter {
         try await Task.detached(priority: .userInitiated) {
-            try PyannoteSegmenter(modelPath: modelPath, threads: threads)
+            try PyannoteSegmenter(modelPath: modelPath, threads: threads, useGPU: useGPU)
         }.value
     }
 

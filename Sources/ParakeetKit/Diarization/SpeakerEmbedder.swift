@@ -16,8 +16,10 @@ public actor SpeakerEmbedder {
 
     private let ctx: OpaquePointer
 
-    public init(modelPath: String, threads: Int = 2) throws {
-        guard let ctx = titanet_init(modelPath, Int32(threads)) else {
+    /// `useGPU` runs the encoder as a ggml graph on Metal (orders of magnitude
+    /// faster than the CPU reference loops; embeddings agree to cosine ≥ 0.999).
+    public init(modelPath: String, threads: Int = 2, useGPU: Bool = false) throws {
+        guard let ctx = titanet_init_ex(modelPath, Int32(threads), useGPU) else {
             throw ParakeetError.modelLoadFailed(modelPath)
         }
         self.ctx = ctx
@@ -28,9 +30,10 @@ public actor SpeakerEmbedder {
     }
 
     /// Loads the (small) model off-main.
-    public static func make(modelPath: String, threads: Int = 2) async throws -> SpeakerEmbedder {
+    public static func make(modelPath: String, threads: Int = 2,
+                            useGPU: Bool = false) async throws -> SpeakerEmbedder {
         try await Task.detached(priority: .userInitiated) {
-            try SpeakerEmbedder(modelPath: modelPath, threads: threads)
+            try SpeakerEmbedder(modelPath: modelPath, threads: threads, useGPU: useGPU)
         }.value
     }
 

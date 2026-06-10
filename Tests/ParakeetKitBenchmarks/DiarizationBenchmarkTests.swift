@@ -56,6 +56,56 @@ final class DiarizationBenchmarkTests: XCTestCase {
                         name: "diarization-live")
     }
 
+    /// CPU↔GPU parity of the graph ports (devices only — the simulator runs
+    /// CPU like the engine): TitaNet embeddings cosine ≥ 0.999, pyannote
+    /// turn sequences identical (±1 frame), GPU times recorded.
+    func testGPUParity() async throws {
+        guard ParakeetEngine.preferredUseGPU else {
+            throw XCTSkip("GPU parity runs on physical devices only")
+        }
+        let titanet = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.titanetLarge)
+        let pyannote = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.pyannoteSegmentation)
+        let ryan = try BenchEnv.loadVoice("voice-ryan")
+        let serena = try BenchEnv.loadVoice("voice-serena")
+        let gap = [Float](repeating: 0, count: Int(0.8 * 16_000))
+        let audio = ryan + gap + serena + gap + ryan
+
+        // TitaNet: same voice, both paths → near-identical embedding.
+        let embCPU = try await SpeakerEmbedder.make(modelPath: titanet, useGPU: false)
+        let embGPU = try await SpeakerEmbedder.make(modelPath: titanet, useGPU: true)
+        guard let eCPU = await embCPU.embed(ryan), var eGPU = await embGPU.embed(ryan) else {
+            return XCTFail("embedding failed")
+        }
+        var t0 = Date()
+        for _ in 0..<3 { eGPU = await embGPU.embed(ryan) ?? eGPU }
+        let titanetGPUSeconds = Date().timeIntervalSince(t0) / 3
+        let cos = zip(eCPU, eGPU).reduce(Float(0)) { $0 + $1.0 * $1.1 } // both L2-normalized
+        XCTAssertGreaterThanOrEqual(cos, 0.999, "titanet cpu/gpu drifted: \(cos)")
+
+        // Pyannote: identical turn sequence (local speakers + ±1 frame times).
+        let segCPU = try await PyannoteSegmenter.make(modelPath: pyannote, useGPU: false)
+        let segGPU = try await PyannoteSegmenter.make(modelPath: pyannote, useGPU: true)
+        guard let pCPU = await segCPU.posteriors(for: audio) else { return XCTFail("cpu seg failed") }
+        t0 = Date()
+        guard let pGPU = await segGPU.posteriors(for: audio) else { return XCTFail("gpu seg failed") }
+        let pyannoteGPUSeconds = Date().timeIntervalSince(t0)
+        let turnsCPU = pCPU.speakerTurns()
+        let turnsGPU = pGPU.speakerTurns()
+        XCTAssertEqual(turnsCPU.count, turnsGPU.count, "\(turnsCPU) vs \(turnsGPU)")
+        let frame = PyannotePosteriors.frameDuration
+        for (a, b) in zip(turnsCPU, turnsGPU) {
+            XCTAssertEqual(a.localSpeaker, b.localSpeaker)
+            XCTAssertEqual(a.start, b.start, accuracy: frame * 1.5)
+            XCTAssertEqual(a.end, b.end, accuracy: frame * 1.5)
+        }
+
+        BenchJSON.write(["titanetCosine": "\(cos)",
+                         "titanetGPUSeconds": "\(titanetGPUSeconds)",
+                         "pyannoteGPUSeconds": "\(pyannoteGPUSeconds)",
+                         "turns": "\(turnsGPU.count)"],
+                        name: "diarization-gpu-parity")
+    }
+
     /// Final pass over a ryan → serena → ryan conversation: pyannote turns +
     /// word labels separate both speakers and re-identify the first one.
     func testFinalPassLabelsWords() async throws {
