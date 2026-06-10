@@ -1,12 +1,14 @@
 # ParakeetKit
 
-A reusable Swift Package for **on-device speech recognition with parakeet.cpp**
-(NVIDIA Parakeet TDT + FireRedVAD, via ggml/Metal). Wraps the
-`Parakeet.xcframework` and provides clean APIs for:
+A reusable Swift Package for **on-device speech recognition and speaker
+diarization with parakeet.cpp** (NVIDIA Parakeet TDT + FireRedVAD +
+TitaNet/pyannote, via ggml/Metal). Wraps the `Parakeet.xcframework` and
+provides clean APIs for:
 
-- **Model download** — an extensible catalog (4 built-in Parakeet TDT 0.6B v3 quants + register your own) and a SwiftUI-free downloader.
+- **Model download** — an extensible catalog (4 Parakeet TDT 0.6B v3 quants + TitaNet/pyannote diarization models + register your own) and a SwiftUI-free downloader.
 - **Live streaming** — a hypothesis ("hyp") preview + committed ("fester") transcript, VAD-gated, surfaced as an `AsyncStream<StreamingEvent>`.
-- **Encoder/decoder run counts** + RTF, per call and cumulative over a session.
+- **Speaker diarization** — live per-segment speaker IDs, word-level speakers + turns in the final pass, persistent named-speaker recognition.
+- **Metrics & evaluation** — encoder/decoder run counts + RTF per call and per session, a `WordErrorRate` utility, and a benchmark suite (`scripts/benchmark.sh`).
 
 > **iOS only.** The `Parakeet.xcframework` is a static library with `ios-arm64`
 > + `ios-arm64-simulator` slices (no macOS). The pure-logic `ParakeetCore` target
@@ -29,8 +31,10 @@ let url = try await ModelDownloader().download(spec) { p in print("download \(In
 let engine = try await ParakeetEngine.make(spec: spec, downloadedAt: url)
 
 let samples = try AudioFileLoader.loadSamples(url: wavURL)   // 16 kHz mono
-let result = engine.transcribe(samples)
-print(result.text, result.encoderRuns, result.decoderSteps, result.rtf)
+let result = await engine.transcribe(samples)                // ≤ ~20 s clips
+// long recordings: NeMo-streamed windows (30 s/5 s), same quality, word timestamps
+let long = await engine.transcribeLong(samples)
+print(result.text, result.words, result.encoderRuns, result.rtf)
 ```
 
 ## Quick start — live streaming (hyp + committed text)
@@ -84,7 +88,9 @@ try await live.enrollSpeaker(name: "christopher", samples: voiceSample) // ≥ ~
 
 `Diarizer`, `SpeakerEmbedder`, `PyannoteSegmenter` (ParakeetKit) and
 `SpeakerClusterer`, `SpeakerDB`, `PyannotePosteriors` (ParakeetCore, pure
-Swift) are public for custom pipelines.
+Swift) are public for custom pipelines. TitaNet/pyannote run on CPU —
+`DiarizationOptions.threads` (default 2) is the tuning knob; verified
+quality numbers live in `benchmarks/README.md`.
 
 `StreamingSession` (in `ParakeetCore`) holds the commit/hypothesis state machine,
 is driven by an injected transcriber + `VADGating`, and is fully unit-testable
@@ -128,27 +134,39 @@ ParakeetModelCatalog.shared.register(.huggingFace(
 
 ```bash
 bash scripts/build-xcframework.sh        # copy Parakeet.xcframework from parakeet-ios + inject modulemap
-swift test                               # pure-logic tests (streaming state machine + catalog) on macOS
-xcodebuild -scheme ParakeetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
-bash scripts/benchmark.sh                # WER/RTF/cost benchmarks on the iOS simulator — see benchmarks/README.md
-PARAKEET_BENCH_DEST=device bash scripts/benchmark.sh   # same suite on a connected device (Metal; downloads the model once)
+                                         # (--rebuild builds upstream first: parakeet + firered-vad + diarization)
+swift test                               # pure-logic tests (streaming, diarization core, catalog, WER) on macOS
+bash scripts/benchmark.sh                # WER/RTF/cost + diarization benchmarks on the iOS simulator — see benchmarks/README.md
+PARAKEET_BENCH_DEST=device bash scripts/benchmark.sh   # same suite on a connected device (Metal; downloads models once)
 ```
+
+Device/benchmark runs generate `ParakeetBench.xcodeproj` via `xcodegen`
+(project.yml; gitignored). Note: while that project exists in the repo root,
+xcodebuild prefers it over the SPM package — plain package builds then go
+through `-project ParakeetBench.xcodeproj -scheme BenchHost` (or delete the
+generated project).
 
 ## Publishing a release (remote SPM)
 
 ```bash
 bash scripts/build-xcframework.sh
-bash scripts/package-xcframework.sh parakeet-1   # zips + prints url+checksum
+bash scripts/package-xcframework.sh parakeet-2   # zips + prints url+checksum
 # paste url+checksum into Package.swift, commit, then:
-git tag parakeet-1 && git push --tags
-gh release create parakeet-1 dist/Parakeet.xcframework.zip
+git tag parakeet-2 && git push --tags
+gh release create parakeet-2 dist/Parakeet.xcframework.zip
 ```
 
 The manifest auto-selects: local `Frameworks/Parakeet.xcframework` when present
 (or `PARAKEETKIT_LOCAL_XCFRAMEWORK=1`), otherwise the remote `url:`+`checksum:`.
 
+> ⚠️ The diarization backend (titanet/pyannote symbols) exists only in locally
+> rebuilt frameworks so far — the published `parakeet-1` binary predates it.
+> Remote-SPM consumers need a `parakeet-2` binary release before the
+> diarization APIs work for them.
+
 ## Notes
 
-- The bundled FireRedVAD model (`firered-stream-vad.gguf`, ~2.2 MB) ships in the package (`Bundle.module`); ASR models are downloaded at runtime.
+- The bundled FireRedVAD model (`firered-stream-vad.gguf`, ~2.2 MB) ships in the package (`Bundle.module`); ASR and diarization models are downloaded at runtime.
 - The static archive bundles its own ggml. A standalone ParakeetKit app needs no special linking. An app that uses **both ParakeetKit and LlamaKit** must `-force_load` the parakeet archive (the two ggml copies otherwise collide — static archive vs. LlamaKit's dynamic framework).
-- Models: Parakeet TDT 0.6B v3 (CC-BY-4.0, GGUF by `cstr`), FireRedVAD (Apache-2.0). Inference: CrispStrobe/CrispASR (parakeet + firered-vad backends), ggml.
+- Models: Parakeet TDT 0.6B v3 (CC-BY-4.0), TitaNet-Large (CC-BY-4.0, NVIDIA), pyannote-segmentation-3.0 (MIT) — GGUFs by `cstr`; FireRedVAD (Apache-2.0). Inference: CrispStrobe/CrispASR (parakeet + firered-vad + diarization backends), ggml.
+- New in 1.2: `StreamingEvent` gained `.speaker` and `.finalizedTranscript` — exhaustive switches need the two new cases (or a `default`).
