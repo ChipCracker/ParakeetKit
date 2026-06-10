@@ -1,5 +1,30 @@
 # ParakeetKit Benchmarks
 
+## Diarization-Testaudio
+
+`Tests/ParakeetKitBenchmarks/Resources/voice-{ryan,serena}.wav` sind zwei
+synthetische Sprecher (qwen3-tts CustomVoice, 16 kHz mono, ASR-verifizierte
+Transkripte in `BenchEnv`). Regenerieren:
+
+```bash
+cd ../parakeet-ios/third_party/CrispASR
+cmake -B build-macos -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON \
+      -DCRISPASR_BUILD_TESTS=OFF -DCRISPASR_BUILD_SERVER=OFF
+cmake --build build-macos --target crispasr-cli -j 8
+# Talker: cstr/qwen3-tts-0.6b-customvoice-GGUF (q8_0, 967 MB)
+# Codec:  cstr/qwen3-tts-tokenizer-12hz-GGUF (q8_0, 290 MB)
+build-macos/bin/crispasr --backend qwen3-tts -m talker.gguf --codec-model codec.gguf \
+    --voice ryan --tts "The quick brown fox jumps over the lazy dog near the river bank." \
+    --tts-output voice-ryan-24k.wav
+afconvert -f WAVE -d LEI16@16000 -c 1 voice-ryan-24k.wav voice-ryan.wav
+# Weitere Stimmen: aiden, dylan, eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian
+```
+
+`DiarizationBenchmarkTests` prüft mit echten Modellen (TitaNet 44 MB +
+pyannote 6 MB, Download via ModelDownloader): Embedding-Konsistenz (gleiche
+Stimme → gleiche ID), Sprechertrennung, SpeakerDB-Namensauflösung und den
+wortgenauen Final-Pass inkl. Re-Identifikation (ryan → serena → ryan).
+
 Verifiziert, dass Performance-Optimierungen die Erkennungsqualität nicht
 verschlechtern. Zwei Ebenen:
 

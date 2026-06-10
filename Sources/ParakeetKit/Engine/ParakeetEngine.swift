@@ -162,6 +162,12 @@ public actor ParakeetEngine {
                                           end: Double(w.t1) / 100.0,
                                           probability: w.p))
             }
+        } else if let tptr = r.tokens, r.n_tokens > 0 {
+            // The split decode path (streamed/chunked/decode_frames) skips the
+            // C-side word grouping ("the backend adapter builds words from
+            // tokens anyway") — group SentencePiece sub-tokens here: a token
+            // whose text starts with ' ' begins a new word.
+            words = Self.groupWords(tokens: tptr, count: Int(r.n_tokens))
         }
         return ParakeetTranscript(text: text.trimmingCharacters(in: .whitespacesAndNewlines),
                                   words: words,
@@ -169,6 +175,45 @@ public actor ParakeetEngine {
                                   decoderSteps: decoderSteps,
                                   audioSeconds: audioSeconds,
                                   processingSeconds: processingSeconds)
+    }
+
+    /// Groups sub-word tokens into words at SentencePiece boundaries
+    /// (leading space, '▁' already converted by the C side).
+    private static func groupWords(tokens: UnsafeMutablePointer<parakeet_token_data>,
+                                   count: Int) -> [ParakeetWord] {
+        var words: [ParakeetWord] = []
+        var text = ""
+        var t0: Int64 = 0
+        var t1: Int64 = 0
+        var pSum: Float = 0
+        var n = 0
+
+        func flush() {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty, n > 0 {
+                words.append(ParakeetWord(text: trimmed,
+                                          start: Double(t0) / 100.0,
+                                          end: Double(t1) / 100.0,
+                                          probability: pSum / Float(n)))
+            }
+            text = ""; pSum = 0; n = 0
+        }
+
+        for i in 0..<count {
+            let token = tokens[i]
+            let piece = Self.fixedCString(token.text)
+            guard !piece.isEmpty else { continue }
+            if piece.hasPrefix(" ") || n == 0 {
+                flush()
+                t0 = token.t0
+            }
+            text += piece
+            t1 = max(t1, token.t1)
+            pSum += token.p
+            n += 1
+        }
+        flush()
+        return words
     }
 
     /// Converts a fixed C `char[]` tuple into a Swift string.

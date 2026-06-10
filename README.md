@@ -50,11 +50,41 @@ for await event in try await live.start() {
     case .speaking(let on): print("speaking:", on)
     case .level(let l):     _ = l           // 0…1 for a level meter / waveform
     case .finalized(let text): print("final:", text)
+    case .speaker(let i, let id, let name): // diarization: who said segment i
+        print("segment \(i) → speaker \(name ?? "#\(id)")")
+    case .finalizedTranscript(let t):       // word timestamps (+ speakers/turns)
+        _ = t.speakerTurns
     }
 }
 // later:
 await live.stop()
 ```
+
+## Speaker diarization (native, on-device)
+
+TitaNet-Large embeddings + online clustering label every committed segment
+live (`.speaker` events); the pyannote segmentation final pass adds word-level
+speakers and turns to `.finalizedTranscript`. Enrolled voices are recognised
+by name across sessions.
+
+```swift
+let downloader = ModelDownloader()
+let titanet  = try await downloader.download(ParakeetModelCatalog.titanetLarge)      // ~44 MB
+let pyannote = try await downloader.download(ParakeetModelCatalog.pyannoteSegmentation) // ~6 MB
+
+let live = LiveTranscriber(
+    engine: engine,
+    diarization: LiveDiarization(
+        titanetModelURL: titanet,
+        pyannoteModelURL: pyannote,                       // nil = no final pass
+        speakerDBDirectory: mySpeakerProfilesDirectory))  // nil = no name recognition
+
+try await live.enrollSpeaker(name: "christopher", samples: voiceSample) // ≥ ~1 s
+```
+
+`Diarizer`, `SpeakerEmbedder`, `PyannoteSegmenter` (ParakeetKit) and
+`SpeakerClusterer`, `SpeakerDB`, `PyannotePosteriors` (ParakeetCore, pure
+Swift) are public for custom pipelines.
 
 `StreamingSession` (in `ParakeetCore`) holds the commit/hypothesis state machine,
 is driven by an injected transcriber + `VADGating`, and is fully unit-testable

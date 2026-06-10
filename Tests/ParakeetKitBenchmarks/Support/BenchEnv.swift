@@ -108,6 +108,40 @@ enum BenchEnv {
     static func reference(times: Int) -> String {
         Array(repeating: jfkReference, count: times).joined(separator: " ")
     }
+
+    // Two distinct synthetic speakers, generated with CrispASR's qwen3-tts
+    // CustomVoice backend (voices "ryan" and "serena", 16 kHz mono) — see
+    // benchmarks/README.md for the regeneration commands. ASR-verified
+    // transcripts below.
+    static let ryanReference = "The quick brown fox jumps over the lazy dog near the river bank."
+    static let serenaReference = "Speech recognition systems convert spoken language into written text."
+
+    static func loadVoice(_ name: String) throws -> [Float] {
+        guard let url = resourceBundle.url(forResource: name, withExtension: "wav") else {
+            throw XCTSkip("bundled \(name).wav missing")
+        }
+        return try AudioFileLoader.loadSamples(url: url)
+    }
+
+    /// Resolves a diarization model (small: 6–44 MB): explicit dir via
+    /// PARAKEET_BENCH_DIARIZATION_DIR, else container cache, else download
+    /// when PARAKEET_BENCH_DOWNLOAD=1 (devices) or any model env is set
+    /// (simulator benchmark runs).
+    static func resolveDiarizationModelOrSkip(_ spec: ParakeetModelSpec) async throws -> String {
+        if let dir = ProcessInfo.processInfo.environment["PARAKEET_BENCH_DIARIZATION_DIR"] {
+            let path = (dir as NSString).appendingPathComponent(spec.fileName)
+            if FileManager.default.fileExists(atPath: path) { return path }
+        }
+        let downloader = ModelDownloader()
+        if case .ready(let url) = downloader.state(for: spec) { return url.path }
+        let env = ProcessInfo.processInfo.environment
+        guard env["PARAKEET_BENCH_DOWNLOAD"] != nil || env["PARAKEET_BENCH_MODEL"] != nil else {
+            throw XCTSkip("no diarization model: run via scripts/benchmark.sh")
+        }
+        print("[bench] downloading \(spec.fileName) (~\(spec.approxBytes / 1_000_000) MB) …")
+        let url = try await downloader.download(spec)
+        return url.path
+    }
 }
 
 /// One engine-benchmark measurement (single shot, long audio variant, E2E run).

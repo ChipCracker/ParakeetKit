@@ -79,7 +79,13 @@ let package = Package(
         .testTarget(
             name: "ParakeetKitBenchmarks",
             dependencies: ["ParakeetKit", "ParakeetCore"],
-            resources: [.copy("Resources/jfk.wav")],
+            resources: [
+                .copy("Resources/jfk.wav"),
+                // Two qwen3-tts CustomVoice speakers (ryan/serena) for
+                // deterministic diarization tests.
+                .copy("Resources/voice-ryan.wav"),
+                .copy("Resources/voice-serena.wav"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
