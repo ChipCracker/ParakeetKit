@@ -27,4 +27,9 @@ public enum StreamingEvent: Sendable {
     case stats(StreamingStats)
     /// Final transcribeLong() pass over the whole session, emitted on finish().
     case finalized(String)
+    /// Speaker attribution for a committed segment, emitted shortly after its
+    /// `.committed` event. `segmentIndex` counts committed segments from 0;
+    /// `name` is set when the speaker DB recognised an enrolled voice.
+    /// Source note: new case in 1.2 — exhaustive switches need an update.
+    case speaker(segmentIndex: Int, id: Int, name: String?)
 }

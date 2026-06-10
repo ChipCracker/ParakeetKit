@@ -11,14 +11,40 @@ public struct ParakeetWord: Identifiable, Sendable, Hashable {
     public let start: TimeInterval   // seconds
     public let end: TimeInterval     // seconds
     public let probability: Float
+    /// Diarization speaker index (nil when diarization is off/undecided).
+    public let speaker: Int?
 
     public init(id: UUID = UUID(), text: String, start: TimeInterval,
-                end: TimeInterval, probability: Float) {
+                end: TimeInterval, probability: Float, speaker: Int? = nil) {
         self.id = id
         self.text = text
         self.start = start
         self.end = end
         self.probability = probability
+        self.speaker = speaker
+    }
+
+    /// Copy with a (re)assigned speaker — words are immutable value types.
+    public func with(speaker: Int?) -> ParakeetWord {
+        ParakeetWord(id: id, text: text, start: start, end: end,
+                     probability: probability, speaker: speaker)
+    }
+}
+
+/// A contiguous single-speaker region from diarization.
+public struct SpeakerTurn: Sendable, Hashable, Codable {
+    public let start: TimeInterval
+    public let end: TimeInterval
+    /// Global speaker index (cluster ID, stable within a session).
+    public let speaker: Int
+    /// Enrolled name when the speaker DB recognised the voice.
+    public let name: String?
+
+    public init(start: TimeInterval, end: TimeInterval, speaker: Int, name: String? = nil) {
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+        self.name = name
     }
 }
 
@@ -33,15 +59,32 @@ public struct ParakeetTranscript: Sendable {
     /// Duration of processed audio (s) and pure inference time (s).
     public let audioSeconds: Double
     public let processingSeconds: Double
+    /// Dominant diarization speaker of this transcript (nil = diarization off).
+    public let speaker: Int?
+    /// Single-speaker regions when diarization ran (empty otherwise).
+    public let speakerTurns: [SpeakerTurn]
 
     public init(text: String, words: [ParakeetWord], encoderRuns: Int, decoderSteps: Int,
-                audioSeconds: Double, processingSeconds: Double) {
+                audioSeconds: Double, processingSeconds: Double,
+                speaker: Int? = nil, speakerTurns: [SpeakerTurn] = []) {
         self.text = text
         self.words = words
         self.encoderRuns = encoderRuns
         self.decoderSteps = decoderSteps
         self.audioSeconds = audioSeconds
         self.processingSeconds = processingSeconds
+        self.speaker = speaker
+        self.speakerTurns = speakerTurns
+    }
+
+    /// Copy enriched with diarization results (speaker-labelled words/turns).
+    public func with(words: [ParakeetWord]? = nil, speaker: Int?? = nil,
+                     speakerTurns: [SpeakerTurn]? = nil) -> ParakeetTranscript {
+        ParakeetTranscript(text: text, words: words ?? self.words,
+                           encoderRuns: encoderRuns, decoderSteps: decoderSteps,
+                           audioSeconds: audioSeconds, processingSeconds: processingSeconds,
+                           speaker: speaker ?? self.speaker,
+                           speakerTurns: speakerTurns ?? self.speakerTurns)
     }
 
     /// Real-time factor = processing time / audio duration (< 1 = faster than realtime).
