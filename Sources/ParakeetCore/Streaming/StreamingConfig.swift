@@ -17,6 +17,10 @@ public struct StreamingConfig: Sendable {
     public var previewWindowSeconds: Double = 8       // max audio per preview run; 0 = unbounded
     public var previewStepSlowSeconds: Double = 1.2   // preview interval for long segments
     public var previewSlowAfterSeconds: Double = 8    // switch to the slow step from here; .infinity = off
+    // Greedy decode is deterministic: when the endpoint window is sample-
+    // identical to the last preview window, commit that result without a
+    // fresh transcribe run.
+    public var reuseLastPreviewOnCommit: Bool = true
 
     // Endpointing / commit
     public var endpointSilenceSeconds: Double = 0.8  // commit on a real pause

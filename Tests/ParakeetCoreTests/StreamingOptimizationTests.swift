@@ -119,6 +119,60 @@ final class StreamingOptimizationTests: XCTestCase {
         XCTAssertEqual(fastText, slowText)
     }
 
+    // MARK: - B5 commit reuse
+
+    /// A short utterance (< preview window): the last preview sees exactly the
+    /// commit window, so the endpoint reuses its result — one call less, same
+    /// committed text and stats.
+    func testCommitReusesLastPreview() async {
+        var on = makeConfig()
+        on.reuseLastPreviewOnCommit = true
+        var off = makeConfig()
+        off.reuseLastPreviewOnCommit = false
+
+        let parts: [(speech: Double, silence: Double)] = [(2, 1.2)]
+        let (onRecorder, onSession) = await run(parts, config: on)
+        let (offRecorder, offSession) = await run(parts, config: off)
+
+        let onCalls = await onRecorder.calls
+        let offCalls = await offRecorder.calls
+        XCTAssertEqual(offCalls - onCalls, 1, "reuse must save exactly the commit run")
+
+        let onText = await onSession.acceptedText
+        let offText = await offSession.acceptedText
+        XCTAssertEqual(onText, offText)
+        XCTAssertFalse(onText.isEmpty)
+
+        let onStats = await onSession.stats
+        let offStats = await offSession.stats
+        XCTAssertEqual(onStats.encoderRuns, offStats.encoderRuns,
+                       "reused run must be booked into stats like a fresh commit")
+    }
+
+    /// A long utterance (> preview window): previews carry a frozen prefix
+    /// (start > 0), the commit window was never fully previewed — no reuse,
+    /// the commit must run fresh.
+    func testNoReuseWhenPreviewWindowSmallerThanUtterance() async {
+        var on = makeConfig()
+        on.previewWindowSeconds = 2
+        on.reuseLastPreviewOnCommit = true
+        var off = makeConfig()
+        off.previewWindowSeconds = 2
+        off.reuseLastPreviewOnCommit = false
+
+        let parts: [(speech: Double, silence: Double)] = [(6, 1.2)]
+        let (onRecorder, onSession) = await run(parts, config: on)
+        let (offRecorder, offSession) = await run(parts, config: off)
+
+        let onCalls = await onRecorder.calls
+        let offCalls = await offRecorder.calls
+        XCTAssertEqual(onCalls, offCalls, "no reuse possible — call count must match")
+
+        let onText = await onSession.acceptedText
+        let offText = await offSession.acceptedText
+        XCTAssertEqual(onText, offText)
+    }
+
     /// The committed text must be byte-identical with and without the cap —
     /// the cap only touches transient previews.
     func testCommittedTextIdenticalWithAndWithoutCap() async {

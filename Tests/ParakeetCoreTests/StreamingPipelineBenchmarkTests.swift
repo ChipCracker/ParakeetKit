@@ -53,6 +53,7 @@ final class StreamingPipelineBenchmarkTests: XCTestCase {
         var legacy = StreamingConfig()
         legacy.previewWindowSeconds = 0
         legacy.previewSlowAfterSeconds = .infinity
+        legacy.reuseLastPreviewOnCommit = false
 
         let result = await runScenario(name: "defaults", parts: scenarioParts,
                                        config: StreamingConfig())

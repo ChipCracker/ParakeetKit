@@ -130,9 +130,19 @@ public actor StreamingSession {
 
         if endpoint {
             // Commits always transcribe the FULL speech window — the preview
-            // cap never touches the committed/final text.
-            let speech = Array(snapshot[0..<speechEndSample])
-            let result = await transcribe(speech)
+            // cap never touches the committed/final text. If the last preview
+            // already saw exactly this window (start 0 = no frozen prefix,
+            // same end, base unshifted), its result IS the commit result
+            // (greedy decode is deterministic) — skip the duplicate run.
+            let result: ParakeetTranscript
+            if config.reuseLastPreviewOnCommit,
+               let last = lastPreview, last.generation == segmentGeneration,
+               last.start == 0, last.end == speechEndSample {
+                result = last.result
+            } else {
+                let speech = Array(snapshot[0..<speechEndSample])
+                result = await transcribe(speech)
+            }
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
                 committedText += committedText.isEmpty ? text : " " + text
