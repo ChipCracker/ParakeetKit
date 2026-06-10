@@ -21,6 +21,14 @@ cosine ≥ 0,999 und identische Turn-Sequenzen (±1 Frame). **iPad-Lauf steht
 aus** (Gerät war beim letzten Versuch getrennt): `PARAKEET_BENCH_DEST=device
 bash scripts/benchmark.sh`.
 
+Simulator-Befund (empirisch verifiziert via `PARAKEET_BENCH_FORCE_GPU=1`):
+Der Metal-Graph-Pfad **crasht im Simulator beim Gewichts-Upload**
+(`MTLSimDevice newBufferWithLength` → `xpc_shmem_create` → xpc_api_misuse) —
+der Sim-Treiber unterstützt ggml-metals Shared-Buffer nicht. Genau deshalb
+ist `useGPU` dort per Default aus; der komplette Diarization-CPU-Pfad läuft
+im Simulator grün (testLiveAttribution/testFinalPass). Metal-Verifikation:
+macOS-Paritätstools (oben) + Gerät.
+
 ## Diarization-Testaudio
 
 `Tests/ParakeetKitBenchmarks/Resources/voice-{ryan,serena}.wav` sind zwei

@@ -59,9 +59,15 @@ final class DiarizationBenchmarkTests: XCTestCase {
     /// CPU↔GPU parity of the graph ports (devices only — the simulator runs
     /// CPU like the engine): TitaNet embeddings cosine ≥ 0.999, pyannote
     /// turn sequences identical (±1 frame), GPU times recorded.
+    /// PARAKEET_BENCH_FORCE_GPU=1 overrides the skip — intended for unusual
+    /// device setups. In the SIMULATOR this crashes by design of the platform:
+    /// MTLSimDriver cannot create ggml-metal's shared-memory buffers
+    /// (xpc_shmem_create → xpc_api_misuse in newBufferWithLength), which is
+    /// exactly why preferredUseGPU is false there.
     func testGPUParity() async throws {
-        guard ParakeetEngine.preferredUseGPU else {
-            throw XCTSkip("GPU parity runs on physical devices only")
+        guard ParakeetEngine.preferredUseGPU
+                || ProcessInfo.processInfo.environment["PARAKEET_BENCH_FORCE_GPU"] != nil else {
+            throw XCTSkip("GPU parity runs on physical devices only (or PARAKEET_BENCH_FORCE_GPU=1)")
         }
         let titanet = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.titanetLarge)
         let pyannote = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.pyannoteSegmentation)
