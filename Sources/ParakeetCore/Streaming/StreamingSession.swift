@@ -28,6 +28,16 @@ public actor StreamingSession {
     private var samplesSincePreview = 0
     private var processing = false
 
+    // Preview window cap (previewWindowSeconds): previews transcribe only the
+    // tail window; words that scrolled out are frozen into a display prefix.
+    // All sample indices are relative to the CURRENT segment base —
+    // `segmentGeneration` bumps whenever the base shifts (commit/trim/reset),
+    // invalidating anything remembered across an `await`.
+    private var hypPrefixText = ""
+    private var hypPrefixEndSample = 0
+    private var lastPreview: (start: Int, end: Int, generation: Int, result: ParakeetTranscript)?
+    private var segmentGeneration = 0
+
     public private(set) var hypothesisText = ""
     public private(set) var isSpeaking = false
     public private(set) var stats = StreamingStats()
@@ -99,9 +109,11 @@ public actor StreamingSession {
             continuation?.yield(.speaking(false))
             hypothesisText = ""                       // silence → no running hypothesis
             continuation?.yield(.hypothesis(""))
+            invalidatePreviewState()
             let keep = Int(config.preRollSeconds * sr)
             if snapshot.count > keep {
                 segment.removeFirst(min(snapshot.count - keep, segment.count))
+                segmentGeneration += 1
             }
             return
         }
@@ -117,6 +129,8 @@ public actor StreamingSession {
         let endpoint = trailingSilence >= config.endpointSilenceSeconds || bufDuration >= config.maxSegmentSeconds
 
         if endpoint {
+            // Commits always transcribe the FULL speech window — the preview
+            // cap never touches the committed/final text.
             let speech = Array(snapshot[0..<speechEndSample])
             let result = await transcribe(speech)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,6 +142,8 @@ public actor StreamingSession {
             stats.audioSeconds += result.audioSeconds
             stats.processingSeconds += result.processingSeconds
             segment.removeFirst(min(speechEndSample, segment.count))
+            segmentGeneration += 1
+            invalidatePreviewState()
             samplesSincePreview = 0
             hypothesisText = ""
             if !text.isEmpty { continuation?.yield(.committed(segment: text, full: committedText)) }
@@ -136,11 +152,53 @@ public actor StreamingSession {
         } else {
             guard Double(samplesSincePreview) >= config.previewStepSeconds * sr else { return }
             samplesSincePreview = 0
-            let speech = Array(snapshot[0..<speechEndSample])
+            let generation = segmentGeneration
+            let windowStart = previewWindowStart(speechEndSample: speechEndSample, sr: sr,
+                                                 generation: generation)
+            let speech = Array(snapshot[windowStart..<speechEndSample])
             let result = await transcribe(speech)
-            hypothesisText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The segment base may have shifted while we were transcribing
+            // (commitRemaining/finish/reset interleaved) — drop stale results.
+            guard segmentGeneration == generation else { return }
+            lastPreview = (windowStart, speechEndSample, generation, result)
+            let windowText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            hypothesisText = [hypPrefixText, windowText].filter { !$0.isEmpty }
+                .joined(separator: " ")
             continuation?.yield(.hypothesis(hypothesisText))
         }
+    }
+
+    /// Window start for the next preview. Words of the last preview that ended
+    /// before the cap boundary are promoted into the frozen display prefix, and
+    /// the window snaps to that word boundary (no mid-word cuts, no overlap
+    /// between prefix and window text). Transcribers that return no word
+    /// timestamps keep the full window (old behaviour).
+    private func previewWindowStart(speechEndSample: Int, sr: Double, generation: Int) -> Int {
+        guard config.previewWindowSeconds > 0 else { return 0 }
+        let desired = speechEndSample - Int(config.previewWindowSeconds * sr)
+        if desired > hypPrefixEndSample,
+           let last = lastPreview, last.generation == generation {
+            var promoted: [String] = []
+            var promotedEnd = hypPrefixEndSample
+            for word in last.result.words {
+                let wordEnd = last.start + Int(word.end * sr)
+                guard wordEnd <= desired else { break }   // words are time-ordered
+                promoted.append(word.text)
+                promotedEnd = max(promotedEnd, wordEnd)
+            }
+            if !promoted.isEmpty {
+                hypPrefixText = ([hypPrefixText] + promoted).filter { !$0.isEmpty }
+                    .joined(separator: " ")
+                hypPrefixEndSample = promotedEnd
+            }
+        }
+        return min(hypPrefixEndSample, speechEndSample)
+    }
+
+    private func invalidatePreviewState() {
+        hypPrefixText = ""
+        hypPrefixEndSample = 0
+        lastPreview = nil
     }
 
     // MARK: - Finalisation
@@ -159,6 +217,8 @@ public actor StreamingSession {
         stats.audioSeconds += result.audioSeconds
         stats.processingSeconds += result.processingSeconds
         segment.removeAll()
+        segmentGeneration += 1
+        invalidatePreviewState()
         if !text.isEmpty { continuation?.yield(.committed(segment: text, full: committedText)) }
         continuation?.yield(.stats(stats))
     }
@@ -181,6 +241,8 @@ public actor StreamingSession {
         fullAudio.removeAll(keepingCapacity: true)
         samplesSinceTick = 0; samplesSincePreview = 0; processing = false
         isSpeaking = false; stats = StreamingStats()
+        segmentGeneration += 1
+        invalidatePreviewState()
     }
 
     private static func rms(_ samples: [Float]) -> Float {

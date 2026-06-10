@@ -11,6 +11,11 @@ public struct StreamingConfig: Sendable {
     public var vadHopSeconds: Double = 0.3        // run the gate / process every hop
     public var previewStepSeconds: Double = 0.6   // min interval between hypothesis runs
 
+    // Preview cost control. Without a cap, every preview re-transcribes the
+    // whole growing segment (quadratic cost); commits always use the full
+    // window, so the cap never affects the committed/final text.
+    public var previewWindowSeconds: Double = 8   // max audio per preview run; 0 = unbounded
+
     // Endpointing / commit
     public var endpointSilenceSeconds: Double = 0.8  // commit on a real pause
     public var maxSegmentSeconds: Double = 16        // hard commit cap

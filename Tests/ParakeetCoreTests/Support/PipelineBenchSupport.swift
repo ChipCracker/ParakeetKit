@@ -11,13 +11,16 @@ import ParakeetCore
 actor CallRecorder {
     private(set) var calls = 0
     private(set) var samplesTotal = 0
+    private(set) var perCallSamples: [Int] = []
 
     func record(sampleCount: Int) {
         calls += 1
         samplesTotal += sampleCount
+        perCallSamples.append(sampleCount)
     }
 
     var audioSeconds: Double { Double(samplesTotal) / 16_000 }
+    var maxCallSeconds: Double { Double(perCallSamples.max() ?? 0) / 16_000 }
 }
 
 /// Deterministic energy VAD: a 10 ms hop is speech when its peak exceeds 0.05

@@ -47,14 +47,26 @@ final class StreamingPipelineBenchmarkTests: XCTestCase {
     }
 
     func testPipelineCostDefaults() async {
+        // Current defaults vs. the pre-optimization configuration (no preview
+        // cap) — the committed text must be identical, only the preview cost
+        // may differ.
+        var legacy = StreamingConfig()
+        legacy.previewWindowSeconds = 0
+
         let result = await runScenario(name: "defaults", parts: scenarioParts,
                                        config: StreamingConfig())
+        let legacyResult = await runScenario(name: "legacy-unbounded", parts: scenarioParts,
+                                             config: legacy)
         print(PipelineBenchResult.markdownHeader)
         print(result.markdownRow)
-        BenchOutput.write([result], name: "pipeline-benchmark")
+        print(legacyResult.markdownRow)
+        BenchOutput.write([result, legacyResult], name: "pipeline-benchmark")
 
+        XCTAssertEqual(result.committedText, legacyResult.committedText,
+                       "optimizations changed the committed text")
         XCTAssertFalse(result.committedText.isEmpty)
         XCTAssertGreaterThanOrEqual(result.commitCalls, 3)   // one per utterance minimum
-        XCTAssertGreaterThan(result.previewCalls, 15)        // previews dominate the cost
+        XCTAssertGreaterThan(result.previewCalls, 0)
+        XCTAssertLessThanOrEqual(result.previewAudioSeconds, legacyResult.previewAudioSeconds)
     }
 }
