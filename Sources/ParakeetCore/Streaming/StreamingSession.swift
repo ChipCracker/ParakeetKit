@@ -13,11 +13,17 @@ import Foundation
 
 public actor StreamingSession {
     public typealias Transcribe = @Sendable ([Float]) async -> ParakeetTranscript
+    /// Diarization hook: maps a committed speech window to a speaker.
+    /// (Typically: TitaNet embedding → online clustering → optional DB match.)
+    /// Return nil when undecided — no `.speaker` event is emitted then.
+    public typealias SpeakerAttribution = @Sendable ([Float]) async -> (id: Int, name: String?)?
 
     private let config: StreamingConfig
     private let vad: VADGating
     private let transcribe: Transcribe
     private let transcribeLong: Transcribe
+    private let attributeSpeaker: SpeakerAttribution?
+    private var committedSegmentIndex = 0
 
     private var continuation: AsyncStream<StreamingEvent>.Continuation?
 
@@ -47,11 +53,13 @@ public actor StreamingSession {
     public init(config: StreamingConfig = .init(),
                 vad: VADGating = NoOpVADGate(),
                 transcribe: @escaping Transcribe,
-                transcribeLong: Transcribe? = nil) {
+                transcribeLong: Transcribe? = nil,
+                attributeSpeaker: SpeakerAttribution? = nil) {
         self.config = config
         self.vad = vad
         self.transcribe = transcribe
         self.transcribeLong = transcribeLong ?? transcribe
+        self.attributeSpeaker = attributeSpeaker
     }
 
     /// The hot event stream. Call once; events flow until `finish()`.
@@ -134,13 +142,13 @@ public actor StreamingSession {
             // already saw exactly this window (start 0 = no frozen prefix,
             // same end, base unshifted), its result IS the commit result
             // (greedy decode is deterministic) — skip the duplicate run.
+            let speech = Array(snapshot[0..<speechEndSample])
             let result: ParakeetTranscript
             if config.reuseLastPreviewOnCommit,
                let last = lastPreview, last.generation == segmentGeneration,
                last.start == 0, last.end == speechEndSample {
                 result = last.result
             } else {
-                let speech = Array(snapshot[0..<speechEndSample])
                 result = await transcribe(speech)
             }
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -156,9 +164,18 @@ public actor StreamingSession {
             invalidatePreviewState()
             samplesSincePreview = 0
             hypothesisText = ""
-            if !text.isEmpty { continuation?.yield(.committed(segment: text, full: committedText)) }
+            let segmentIndex = committedSegmentIndex
+            if !text.isEmpty {
+                committedSegmentIndex += 1
+                continuation?.yield(.committed(segment: text, full: committedText))
+            }
             continuation?.yield(.stats(stats))
             continuation?.yield(.hypothesis(""))
+            // Speaker attribution last: the text reaches the UI immediately,
+            // the `.speaker` event follows once embedding+clustering ran.
+            // Works on the captured copy — buffer mutations during the await
+            // can't touch it.
+            if !text.isEmpty { await emitSpeaker(for: speech, segmentIndex: segmentIndex) }
         } else {
             // Adaptive cadence: long segments preview less often — the longer
             // the window, the less a 0.6 s refresh adds for the reader.
@@ -221,7 +238,8 @@ public actor StreamingSession {
     /// finalisation, e.g. after a file simulation). Does not close the stream.
     public func commitRemaining() async {
         guard !segment.isEmpty else { return }
-        let result = await transcribe(segment)
+        let speech = segment
+        let result = await transcribe(speech)
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
             committedText += committedText.isEmpty ? text : " " + text
@@ -233,8 +251,20 @@ public actor StreamingSession {
         segment.removeAll()
         segmentGeneration += 1
         invalidatePreviewState()
-        if !text.isEmpty { continuation?.yield(.committed(segment: text, full: committedText)) }
+        let segmentIndex = committedSegmentIndex
+        if !text.isEmpty {
+            committedSegmentIndex += 1
+            continuation?.yield(.committed(segment: text, full: committedText))
+        }
         continuation?.yield(.stats(stats))
+        if !text.isEmpty { await emitSpeaker(for: speech, segmentIndex: segmentIndex) }
+    }
+
+    /// Runs the diarization hook on a committed window and emits `.speaker`.
+    private func emitSpeaker(for speech: [Float], segmentIndex: Int) async {
+        guard let attributeSpeaker else { return }
+        guard let speaker = await attributeSpeaker(speech) else { return }
+        continuation?.yield(.speaker(segmentIndex: segmentIndex, id: speaker.id, name: speaker.name))
     }
 
     /// Stops the session: runs the final `transcribeLong()` pass over the full
@@ -255,6 +285,7 @@ public actor StreamingSession {
         fullAudio.removeAll(keepingCapacity: true)
         samplesSinceTick = 0; samplesSincePreview = 0; processing = false
         isSpeaking = false; stats = StreamingStats()
+        committedSegmentIndex = 0
         segmentGeneration += 1
         invalidatePreviewState()
     }
