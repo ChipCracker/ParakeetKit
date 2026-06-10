@@ -25,6 +25,15 @@ pyannote 6 MB, Download via ModelDownloader): Embedding-Konsistenz (gleiche
 Stimme → gleiche ID), Sprechertrennung, SpeakerDB-Namensauflösung und den
 wortgenauen Final-Pass inkl. Re-Identifikation (ryan → serena → ryan).
 
+Ergebnisse (Sim `…-diarization` / iPad `…-ipad-diar`): identische Qualität
+auf beiden — Live-IDs ryan 0/0, serena 1, Name „ryan" aufgelöst; Final-Pass
+3 Turns, 31/33 Wörter gelabelt, exakt 2 Sprecher, Re-Identifikation korrekt.
+Final-Pass-Zeit auf ~19 s Audio: ~25 s (Sim) / ~30 s (iPad, gedrosselt) —
+TitaNet + pyannote laufen CPU-only; `DiarizationOptions.threads` (Default 2)
+ist der Tuning-Hebel. Hinweis zur Varianz: Direkt aufeinanderfolgende
+Geräteläufe drosseln thermisch (identische Arbeitsmenge, bis 2× Wallclock) —
+Zeiten werden deshalb protokolliert, nie geassertet.
+
 Verifiziert, dass Performance-Optimierungen die Erkennungsqualität nicht
 verschlechtern. Zwei Ebenen:
 
