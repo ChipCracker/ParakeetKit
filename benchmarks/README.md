@@ -73,3 +73,26 @@ verliert nachweislich Wörter an den Chunk-Grenzen (WER 0,167) — deshalb setzt
 `transcribeLong` explizit 30 s/5 s statt der Heuristik. Die Heuristik-Variante
 läuft als Watchdog im Benchmark mit: Fällt ihr WER nach einem
 xcframework-Update auf ~0, kann wieder delegiert werden.
+
+### Endstand: Baseline → alle Optimierungen (`…-optimized`)
+
+Qualität in allen Benchmarks unverändert: WER 0 (single-shot, long-audio,
+E2E committed UND finalized), committedText im Pipeline-A/B byte-identisch.
+
+| Metrik | Baseline | Optimiert | Δ |
+|---|---|---|---|
+| E2E (jfk×3, 11-s-Utterances): transcribe-Aufrufe | 63 | 56 | −11 % |
+| E2E: transkribierte Sekunden | 223,4 | 198,8 | −11 % |
+| E2E: Gesamt-Inferenzzeit (Sim-CPU) | 27,2 s | 25,5 s | −6 % |
+| Pipeline (4/8/16-s-Utterances): Aufrufe | 54 | 43 | −20 % |
+| Pipeline: transkribierte Sekunden | 342 | 213 | −38 % |
+| transcribeLong 66 s: RTF | 0,160 (chunked) | 0,116 (streamed) | −27 % |
+
+Einordnung: Der Pipeline-Gewinn skaliert mit der Utterance-Länge — Deckel und
+Kadenz greifen ab `previewWindowSeconds`/`previewSlowAfterSeconds` (je 8 s).
+Die 11-s-jfk-Utterances im E2E profitieren nur im letzten Drittel (−11 %); die
+16-s-Utterance im synthetischen Szenario zeigt −38 %. Wer mehr Einsparung will,
+senkt `previewWindowSeconds`/`previewSlowAfterSeconds` (Kosten: kürzerer
+Preview-Kontext bzw. trägere Hyp-Updates — der committed Text bleibt davon
+unberührt). Auf echten Geräten kommt der Metal-Flash-Gewinn (~1,6× Encoder,
+B1) hinzu, den der Simulator nicht abbildet.

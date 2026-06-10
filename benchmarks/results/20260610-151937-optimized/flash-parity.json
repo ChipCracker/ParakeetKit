@@ -1,0 +1,6 @@
+{
+  "flashMedianSeconds" : "1.1529290676116943",
+  "name" : "flash-attention-parity",
+  "noFlashMedianSeconds" : "1.1535990238189697",
+  "wer" : "0.0"
+}

@@ -61,6 +61,30 @@ is driven by an injected transcriber + `VADGating`, and is fully unit-testable
 without the binary. Tunables live in `StreamingConfig` (defaults: 0.8 s endpoint
 silence, 16 s max segment, 0.6 s preview step, 0.3 s speech pad, …).
 
+### Streaming cost controls
+
+Previews re-transcribe the buffered segment while you speak; three
+`StreamingConfig` knobs keep that cost bounded **without touching the
+committed/final text** (verified byte-identical by the pipeline benchmark):
+
+- `previewWindowSeconds` (default 8, `0` = unbounded): previews only see the
+  tail window; words that scroll out are frozen into the hypothesis prefix.
+  Commits always use the full speech window.
+- `previewStepSlowSeconds` / `previewSlowAfterSeconds` (1.2 s / 8 s,
+  `.infinity` = off): long segments preview less often.
+- `reuseLastPreviewOnCommit` (default on): when the endpoint window equals the
+  last preview window, its result is committed without a fresh run (greedy
+  decode is deterministic).
+
+### Engine defaults
+
+- `ParakeetEngine.make(useFlashAttention: nil)` enables flash attention
+  whenever `useGPU` is on — bit-identical output, ~1.6× faster encoder on
+  Metal (upstream-verified). Pass `false`/`true` to override.
+- `transcribeLong` uses the NeMo-streamed path (global z-norm, 30 s/5 s
+  windows): same WER as the old chunked path at ~27 % lower RTF on long audio.
+  `transcribeChunked(chunkSeconds:overlapSeconds:)` keeps the legacy behaviour.
+
 ## Custom models
 
 ```swift
@@ -76,6 +100,7 @@ ParakeetModelCatalog.shared.register(.huggingFace(
 bash scripts/build-xcframework.sh        # copy Parakeet.xcframework from parakeet-ios + inject modulemap
 swift test                               # pure-logic tests (streaming state machine + catalog) on macOS
 xcodebuild -scheme ParakeetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+bash scripts/benchmark.sh                # WER/RTF/cost benchmarks (model via PARAKEET_BENCH_MODEL) — see benchmarks/README.md
 ```
 
 ## Publishing a release (remote SPM)
