@@ -150,7 +150,11 @@ public actor StreamingSession {
             continuation?.yield(.stats(stats))
             continuation?.yield(.hypothesis(""))
         } else {
-            guard Double(samplesSincePreview) >= config.previewStepSeconds * sr else { return }
+            // Adaptive cadence: long segments preview less often — the longer
+            // the window, the less a 0.6 s refresh adds for the reader.
+            let step = bufDuration >= config.previewSlowAfterSeconds
+                ? config.previewStepSlowSeconds : config.previewStepSeconds
+            guard Double(samplesSincePreview) >= step * sr else { return }
             samplesSincePreview = 0
             let generation = segmentGeneration
             let windowStart = previewWindowStart(speechEndSample: speechEndSample, sr: sr,

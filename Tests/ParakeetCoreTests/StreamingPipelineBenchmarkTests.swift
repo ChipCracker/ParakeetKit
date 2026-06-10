@@ -48,10 +48,11 @@ final class StreamingPipelineBenchmarkTests: XCTestCase {
 
     func testPipelineCostDefaults() async {
         // Current defaults vs. the pre-optimization configuration (no preview
-        // cap) — the committed text must be identical, only the preview cost
-        // may differ.
+        // cap, fixed cadence) — the committed text must be identical, only
+        // the preview cost may differ.
         var legacy = StreamingConfig()
         legacy.previewWindowSeconds = 0
+        legacy.previewSlowAfterSeconds = .infinity
 
         let result = await runScenario(name: "defaults", parts: scenarioParts,
                                        config: StreamingConfig())

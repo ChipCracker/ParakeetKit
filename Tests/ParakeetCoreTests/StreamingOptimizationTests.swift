@@ -95,6 +95,30 @@ final class StreamingOptimizationTests: XCTestCase {
         XCTAssertGreaterThan(previewMax, 5.0)
     }
 
+    // MARK: - B4 adaptive preview cadence
+
+    func testSlowCadenceReducesPreviewCalls() async {
+        var fast = makeConfig()
+        fast.previewSlowAfterSeconds = .infinity   // cadence change off
+        var slow = makeConfig()
+        slow.previewStepSlowSeconds = 1.2
+        slow.previewSlowAfterSeconds = 4
+
+        let parts: [(speech: Double, silence: Double)] = [(10, 1.2)]
+        let (fastRecorder, fastSession) = await run(parts, config: fast)
+        let (slowRecorder, slowSession) = await run(parts, config: slow)
+
+        let fastCalls = await fastRecorder.calls
+        let slowCalls = await slowRecorder.calls
+        XCTAssertLessThan(slowCalls, fastCalls,
+                          "slow cadence must reduce preview calls (\(slowCalls) vs \(fastCalls))")
+
+        // Cadence only affects WHEN previews run, never what gets committed.
+        let fastText = await fastSession.acceptedText
+        let slowText = await slowSession.acceptedText
+        XCTAssertEqual(fastText, slowText)
+    }
+
     /// The committed text must be byte-identical with and without the cap —
     /// the cap only touches transient previews.
     func testCommittedTextIdenticalWithAndWithoutCap() async {

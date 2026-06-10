@@ -13,8 +13,10 @@ public struct StreamingConfig: Sendable {
 
     // Preview cost control. Without a cap, every preview re-transcribes the
     // whole growing segment (quadratic cost); commits always use the full
-    // window, so the cap never affects the committed/final text.
-    public var previewWindowSeconds: Double = 8   // max audio per preview run; 0 = unbounded
+    // window, so these never affect the committed/final text.
+    public var previewWindowSeconds: Double = 8       // max audio per preview run; 0 = unbounded
+    public var previewStepSlowSeconds: Double = 1.2   // preview interval for long segments
+    public var previewSlowAfterSeconds: Double = 8    // switch to the slow step from here; .infinity = off
 
     // Endpointing / commit
     public var endpointSilenceSeconds: Double = 0.8  // commit on a real pause
