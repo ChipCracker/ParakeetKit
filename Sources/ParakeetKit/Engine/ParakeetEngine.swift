@@ -28,10 +28,10 @@ public actor ParakeetEngine {
     /// `make(...)` to stay off-main.
     ///
     /// `useFlashAttention` fuses the encoder's relative-position attention into
-    /// one `flash_attn_ext` kernel per layer — bit-identical output, ~1.6×
-    /// faster encoder on Metal (upstream-verified for parakeet-tdt-0.6b-v3).
-    /// On the CPU backend the fused kernel is ~18 % SLOWER (measured, see
-    /// benchmarks/), so `nil` (default) enables it exactly when `useGPU` is on.
+    /// one `flash_attn_ext` kernel per layer. Output is bit-identical; speed
+    /// depends on the setup (upstream: 1.61× on M1 Metal with F16; measured
+    /// neutral on M3 Metal with q4_K where quant matmuls dominate; noisy on
+    /// CPU). `nil` (default) enables it exactly when `useGPU` is on.
     public init(modelPath: String, useGPU: Bool = true, threads: Int? = nil,
                 useFlashAttention: Bool? = nil) throws {
         var params = parakeet_context_default_params()

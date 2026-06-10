@@ -94,5 +94,28 @@ Die 11-s-jfk-Utterances im E2E profitieren nur im letzten Drittel (−11 %); die
 16-s-Utterance im synthetischen Szenario zeigt −38 %. Wer mehr Einsparung will,
 senkt `previewWindowSeconds`/`previewSlowAfterSeconds` (Kosten: kürzerer
 Preview-Kontext bzw. trägere Hyp-Updates — der committed Text bleibt davon
-unberührt). Auf echten Geräten kommt der Metal-Flash-Gewinn (~1,6× Encoder,
-B1) hinzu, den der Simulator nicht abbildet.
+unberührt).
+
+### Physisches Gerät: iPad Air 13″ M3, Metal (`…-ipad-m3`)
+
+`PARAKEET_BENCH_DEST=device bash scripts/benchmark.sh` — Host-App via
+xcodegen/project.yml (SPM-Test-Bundles laufen auf Geräten nicht tool-hosted),
+Modell wird beim ersten Lauf aufs Gerät geladen (~466 MB, gecacht).
+
+| Benchmark | iPad M3 (Metal) | Simulator (CPU) |
+|---|---|---|
+| single-shot: RTF | **0,054** (WER 0) | 0,108 |
+| long-audio chunked-20/2 | WER **0,106** · RTF 0,075 | WER 0 · RTF 0,160 |
+| long-audio **streamed-30/5 (Default)** | **WER 0 · RTF 0,050** | WER 0 · RTF 0,116 |
+| E2E: Gesamt-Inferenz (33,7 s Audio) | **14,6 s** (WER 0/0) | 25,5 s |
+| flash-parity (Median of 3) | 0,56 s ≈ 0,55 s (neutral) | 1,15 s vs. 1,86 s |
+
+Zwei Gerätebefunde:
+1. **Der alte chunked-Pfad driftet auf Metal real** (WER 0,106 auf jfk×6 — im
+   CPU-Sim noch 0): Die per-chunk z-norm ist numerisch fragil. Der neue
+   streamed-30/5-Default ist auf dem Gerät gleichzeitig fehlerfrei UND 33 %
+   schneller — B2 ist dort eine echte Qualitätsverbesserung.
+2. **Flash Attention ist auf M3 + q4_K zeitneutral** (Parität bestätigt). Der
+   upstream-1,61× wurde auf M1 mit F16 gemessen, wo der Attention-Anteil
+   dominiert; bei q4_K dominieren Quant-Matmuls/im2col. Default (an bei GPU)
+   bleibt — qualitätsidentisch, und auf F16-Modellen wird der Gewinn erwartet.

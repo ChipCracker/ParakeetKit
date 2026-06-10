@@ -18,3 +18,7 @@ third_party/
 .DS_Store
 DerivedData/
 xcuserdata/
+
+# Generated device-benchmark host project (regenerate via `xcodegen`)
+ParakeetBench.xcodeproj/
+benchmarks/results/*/xcodebuild.log

@@ -12,7 +12,7 @@ import ParakeetKit
 final class E2EStreamingBenchmarkTests: XCTestCase {
 
     func testE2EStreaming() async throws {
-        let model = try BenchEnv.requireModelOrSkip()
+        let model = try await BenchEnv.resolveModelOrSkip()
         let jfk = try BenchEnv.loadJFK()
         let audio = BenchEnv.chain(jfk, count: 3, gapSeconds: 1.2)   // ~35 s
         let reference = BenchEnv.reference(times: 3)

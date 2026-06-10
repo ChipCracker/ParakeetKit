@@ -100,7 +100,8 @@ ParakeetModelCatalog.shared.register(.huggingFace(
 bash scripts/build-xcframework.sh        # copy Parakeet.xcframework from parakeet-ios + inject modulemap
 swift test                               # pure-logic tests (streaming state machine + catalog) on macOS
 xcodebuild -scheme ParakeetKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
-bash scripts/benchmark.sh                # WER/RTF/cost benchmarks (model via PARAKEET_BENCH_MODEL) — see benchmarks/README.md
+bash scripts/benchmark.sh                # WER/RTF/cost benchmarks on the iOS simulator — see benchmarks/README.md
+PARAKEET_BENCH_DEST=device bash scripts/benchmark.sh   # same suite on a connected device (Metal; downloads the model once)
 ```
 
 ## Publishing a release (remote SPM)

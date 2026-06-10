@@ -1,0 +1,65 @@
+# Device-benchmark host project (generated → ParakeetBench.xcodeproj, not
+# committed). Physical devices can't run SPM test bundles tool-hosted, so this
+# wraps the existing Tests/ParakeetKitBenchmarks sources in a hosted unit-test
+# target. Regenerate with `xcodegen`; run via
+#   PARAKEET_BENCH_DEST=device bash scripts/benchmark.sh
+name: ParakeetBench
+options:
+  bundleIdPrefix: de.bayzeit
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+
+packages:
+  ParakeetKit:
+    path: .
+
+targets:
+  BenchHost:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [BenchHost]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: de.bayzeit.parakeet-bench-host
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+    dependencies:
+      - package: ParakeetKit
+        product: ParakeetKit
+      - sdk: Metal.framework
+      - sdk: Accelerate.framework
+      - sdk: AVFoundation.framework
+
+  DeviceBenchmarks:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Tests/ParakeetKitBenchmarks
+    dependencies:
+      - target: BenchHost
+      - package: ParakeetKit
+        product: ParakeetKit
+      - package: ParakeetKit
+        product: ParakeetCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: de.bayzeit.parakeet-bench-tests
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: "YES"
+
+schemes:
+  ParakeetBench:
+    build:
+      targets:
+        BenchHost: all
+    test:
+      targets:
+        - DeviceBenchmarks

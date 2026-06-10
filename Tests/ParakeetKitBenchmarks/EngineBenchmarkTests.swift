@@ -12,7 +12,7 @@ import ParakeetKit
 final class EngineBenchmarkTests: XCTestCase {
 
     func testSingleShotJFK() async throws {
-        let model = try BenchEnv.requireModelOrSkip()
+        let model = try await BenchEnv.resolveModelOrSkip()
         let jfk = try BenchEnv.loadJFK()
         let engine = try await ParakeetEngine.make(modelPath: model,
                                                    useGPU: ParakeetEngine.preferredUseGPU)
@@ -32,7 +32,7 @@ final class EngineBenchmarkTests: XCTestCase {
     /// Simulator timings are noisy CPU numbers (±30 % between runs), so each
     /// variant is measured 3× and the median recorded; the hard assert is parity.
     func testFlashAttentionParity() async throws {
-        let model = try BenchEnv.requireModelOrSkip()
+        let model = try await BenchEnv.resolveModelOrSkip()
         let jfk = try BenchEnv.loadJFK()
 
         func median3(_ engine: ParakeetEngine) async -> (text: String, seconds: Double) {
@@ -73,7 +73,7 @@ final class EngineBenchmarkTests: XCTestCase {
     }
 
     func testLongAudio() async throws {
-        let model = try BenchEnv.requireModelOrSkip()
+        let model = try await BenchEnv.resolveModelOrSkip()
         let jfk = try BenchEnv.loadJFK()
         let long = BenchEnv.chain(jfk, count: 6, gapSeconds: 0)   // ~66 s
         let reference = BenchEnv.reference(times: 6)
