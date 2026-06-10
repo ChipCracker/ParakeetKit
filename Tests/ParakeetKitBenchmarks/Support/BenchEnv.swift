@@ -18,23 +18,37 @@ enum BenchEnv {
         ProcessInfo.processInfo.environment["PARAKEET_BENCH_MODEL"]
     }
 
+    /// Catalog spec for download-based runs, selected via
+    /// PARAKEET_BENCH_MODEL_ID ("q4_k" | "q5_0" | "q8_0" | "f16" or a full
+    /// catalog id). Default: q4_K.
+    static var benchSpec: ParakeetModelSpec {
+        switch ProcessInfo.processInfo.environment["PARAKEET_BENCH_MODEL_ID"]?.lowercased() {
+        case "f16", "parakeet-tdt-0.6b-v3-f16": return ParakeetModelCatalog.f16
+        case "q8_0", "parakeet-tdt-0.6b-v3-q8_0": return ParakeetModelCatalog.q8_0
+        case "q5_0", "parakeet-tdt-0.6b-v3-q5_0": return ParakeetModelCatalog.q5_0
+        default: return ParakeetModelCatalog.q4_K
+        }
+    }
+
     /// Resolves the benchmark model, in order:
     /// 1. PARAKEET_BENCH_MODEL path — simulator runs read it from the host.
     /// 2. A model already in the app container (previous on-device run).
-    /// 3. PARAKEET_BENCH_DOWNLOAD=1 — fetch q4_K (466 MB) via ModelDownloader;
-    ///    physical devices can't see host paths, so they download once and
-    ///    cache in Application Support.
+    /// 3. PARAKEET_BENCH_DOWNLOAD=1 — fetch the selected spec via
+    ///    ModelDownloader; physical devices can't see host paths, so they
+    ///    download once and cache in Application Support.
     static func resolveModelOrSkip() async throws -> String {
         if let path = modelPath, FileManager.default.fileExists(atPath: path) {
             return path
         }
         let downloader = ModelDownloader()
-        let spec = ParakeetModelCatalog.q4_K
+        let spec = benchSpec
+        print("[bench] model: \(spec.fileName)")
         if case .ready(let url) = downloader.state(for: spec) {
             return url.path
         }
         if ProcessInfo.processInfo.environment["PARAKEET_BENCH_DOWNLOAD"] != nil {
-            print("[bench] downloading \(spec.fileName) (~466 MB) to the device …")
+            let mb = spec.approxBytes / 1_000_000
+            print("[bench] downloading \(spec.fileName) (~\(mb) MB) to the device …")
             final class ProgressGate: @unchecked Sendable {
                 private let lock = NSLock()
                 private var last = -1

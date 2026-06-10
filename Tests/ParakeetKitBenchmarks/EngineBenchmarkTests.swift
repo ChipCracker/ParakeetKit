@@ -11,11 +11,25 @@ import ParakeetKit
 
 final class EngineBenchmarkTests: XCTestCase {
 
+    /// Single-shot and long-audio share one engine: loading the 1.26 GB F16
+    /// weights once per test pushes the test process into iPadOS memory
+    /// limits (the 5th sequential load fails with posix_memalign). Kept alive
+    /// for the suite; XCTSkip from model resolution propagates through.
+    private static var sharedEngineTask: Task<ParakeetEngine, Error>?
+    private static func sharedEngine() async throws -> ParakeetEngine {
+        if let task = sharedEngineTask { return try await task.value }
+        let task = Task<ParakeetEngine, Error> {
+            let model = try await BenchEnv.resolveModelOrSkip()
+            return try await ParakeetEngine.make(modelPath: model,
+                                                 useGPU: ParakeetEngine.preferredUseGPU)
+        }
+        sharedEngineTask = task
+        return try await task.value
+    }
+
     func testSingleShotJFK() async throws {
-        let model = try await BenchEnv.resolveModelOrSkip()
         let jfk = try BenchEnv.loadJFK()
-        let engine = try await ParakeetEngine.make(modelPath: model,
-                                                   useGPU: ParakeetEngine.preferredUseGPU)
+        let engine = try await Self.sharedEngine()
 
         let result = await engine.transcribe(jfk)
         let wer = WordErrorRate.wer(reference: BenchEnv.jfkReference, hypothesis: result.text)
@@ -73,12 +87,10 @@ final class EngineBenchmarkTests: XCTestCase {
     }
 
     func testLongAudio() async throws {
-        let model = try await BenchEnv.resolveModelOrSkip()
         let jfk = try BenchEnv.loadJFK()
         let long = BenchEnv.chain(jfk, count: 6, gapSeconds: 0)   // ~66 s
         let reference = BenchEnv.reference(times: 6)
-        let engine = try await ParakeetEngine.make(modelPath: model,
-                                                   useGPU: ParakeetEngine.preferredUseGPU)
+        let engine = try await Self.sharedEngine()
 
         // Old default path (per-chunk z-norm, 20 s/2 s) vs. the new streamed
         // default (global z-norm, 30 s/5 s). The binary's own heuristic

@@ -118,4 +118,31 @@ Zwei Gerätebefunde:
 2. **Flash Attention ist auf M3 + q4_K zeitneutral** (Parität bestätigt). Der
    upstream-1,61× wurde auf M1 mit F16 gemessen, wo der Attention-Anteil
    dominiert; bei q4_K dominieren Quant-Matmuls/im2col. Default (an bei GPU)
-   bleibt — qualitätsidentisch, und auf F16-Modellen wird der Gewinn erwartet.
+   bleibt — qualitätsidentisch.
+
+### F16 auf dem iPad M3 (`…-ipad-m3-f16`)
+
+`PARAKEET_BENCH_MODEL_ID=f16` lädt das 1,26-GB-F16-GGUF aufs Gerät. Vergleich
+(beide Metal, gleiche Audio-Eingaben):
+
+| Metrik | F16 | q4_K |
+|---|---|---|
+| single-shot: RTF | **0,050** (WER 0) | 0,054 (WER 0) |
+| long-audio streamed-30/5: RTF | **0,049** (WER 0) | 0,050 (WER 0) |
+| E2E: Gesamt-Inferenz (33,7 s) | 13,9 s | 14,6 s |
+| flash-parity (Median of 3) | 0,555 s ≈ 0,553 s | 0,560 s ≈ 0,550 s |
+| Watchdog Binary-Heuristik | WER 0,235 | WER 0,167 |
+
+Befunde:
+- **F16 ist nur ~5 % schneller als q4_K** bei identischer Qualität (WER 0) —
+  und 2,7× größer (1,26 GB vs. 467 MB). **q4_K bleibt die richtige
+  Default-Empfehlung** für on-device.
+- **Flash Attention ist auch mit F16 auf dem M3 zeitneutral.** Der
+  upstream-1,61× (M1) reproduziert sich auf der M3-GPU-Generation generell
+  nicht — der Gewinn dort stammte primär aus Kernel-Launch-Overhead, der auf
+  neueren GPUs/Metal-Runtimes deutlich kleiner ist. Output bleibt in allen
+  Konfigurationen identisch; der GPU-gekoppelte Default ist damit weiterhin
+  unbedenklich.
+- Test-Infrastruktur: 5 sequenzielle 1,26-GB-Engine-Loads sprengen das
+  iPadOS-Prozesslimit (`posix_memalign failed`) — Single-Shot und Long-Audio
+  teilen sich deshalb eine Engine-Instanz pro Suite.

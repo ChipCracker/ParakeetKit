@@ -18,6 +18,7 @@
 # Env overrides:
 #   PARAKEET_BENCH_DEST       simulator (default) | device
 #   PARAKEET_BENCH_MODEL      GGUF path for simulator runs (default: parakeet-ios vendor model)
+#   PARAKEET_BENCH_MODEL_ID   catalog model for device runs: q4_k (default) | q5_0 | q8_0 | f16
 #   PARAKEET_BENCH_SIM        simulator name (default: first available iPhone)
 #   PARAKEET_BENCH_DEVICE_ID  device UDID (default: first connected non-Mac device via xctrace)
 #   PARAKEET_BENCH_TEAM       DEVELOPMENT_TEAM for device code signing
@@ -57,6 +58,7 @@ if [ "$DEST" = "device" ]; then
     ( cd "$ROOT" && xcodegen generate --quiet )
     ( cd "$ROOT" && \
       TEST_RUNNER_PARAKEET_BENCH_DOWNLOAD=1 \
+      TEST_RUNNER_PARAKEET_BENCH_MODEL_ID="${PARAKEET_BENCH_MODEL_ID:-}" \
       xcodebuild test \
         -project ParakeetBench.xcodeproj \
         -scheme ParakeetBench \
@@ -80,15 +82,19 @@ for devs in json.load(sys.stdin)["devices"].values():
     [ -n "$SIM" ] || { echo "ERROR: no available iPhone simulator found" >&2; exit 1; }
 
     echo "=== 2/2 Engine benchmarks (simulator: $SIM, model: $(basename "$MODEL")) ==="
+    # Same generated project as the device path — once ParakeetBench.xcodeproj
+    # exists in the root, xcodebuild prefers it over the SPM package, so the
+    # package scheme is no longer addressable here.
+    ( cd "$ROOT" && xcodegen generate --quiet )
     # TEST_RUNNER_-prefixed vars are stripped by xcodebuild and handed to the
     # test process — plain env vars do NOT reach simulator tests.
     ( cd "$ROOT" && \
       TEST_RUNNER_PARAKEET_BENCH_MODEL="$MODEL" \
       TEST_RUNNER_PARAKEET_BENCH_OUT="$OUT" \
       xcodebuild test \
-        -scheme ParakeetKit-Package \
+        -project ParakeetBench.xcodeproj \
+        -scheme ParakeetBench \
         -destination "platform=iOS Simulator,name=$SIM" \
-        -only-testing:ParakeetKitBenchmarks \
         -derivedDataPath "$ROOT/.build/benchmark-dd" \
         2>&1 | tee "$LOG" | grep -E "Test Case|Test Suite|\[bench\]|error:|failed" || true )
 fi
