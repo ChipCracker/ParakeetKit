@@ -71,5 +71,16 @@ let package = Package(
             name: "ParakeetCoreTests",
             dependencies: ["ParakeetCore"]
         ),
+
+        // Engine benchmarks (real inference) — iOS only; every source file is
+        // wrapped in #if os(iOS) so `swift test` on macOS compiles them empty.
+        // Run via scripts/benchmark.sh (xcodebuild against an iOS simulator,
+        // model path injected via TEST_RUNNER_PARAKEET_BENCH_MODEL).
+        .testTarget(
+            name: "ParakeetKitBenchmarks",
+            dependencies: ["ParakeetKit", "ParakeetCore"],
+            resources: [.copy("Resources/jfk.wav")],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

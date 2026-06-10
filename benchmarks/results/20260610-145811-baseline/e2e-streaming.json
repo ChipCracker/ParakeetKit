@@ -1,0 +1,14 @@
+{
+  "audioSeconds" : 33.6596875,
+  "committedWER" : 0,
+  "decoderSteps" : 156,
+  "encoderRuns" : 9,
+  "finalizedWER" : 0,
+  "name" : "e2e-streaming-jfk-x3",
+  "processingSeconds" : 3.660922050476074,
+  "rtf" : 0.10876280567001921,
+  "totalProcessingSeconds" : 27.20399558544159,
+  "transcribeCalls" : 63,
+  "transcribedSecondsTotal" : 223.421875,
+  "wer" : 0
+}

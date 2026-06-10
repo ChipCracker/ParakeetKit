@@ -1,0 +1,9 @@
+{
+  "audioSeconds" : 11,
+  "decoderSteps" : 47,
+  "encoderRuns" : 1,
+  "name" : "single-shot-jfk",
+  "processingSeconds" : 1.1931170225143433,
+  "rtf" : 0.10846518386494029,
+  "wer" : 0
+}
