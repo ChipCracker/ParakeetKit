@@ -1,5 +1,26 @@
 # ParakeetKit Benchmarks
 
+## Diarization auf GPU (Metal)
+
+TitaNet und Pyannote laufen mit `DiarizationOptions.useGPU` (Default: an auf
+Geräten, aus im Simulator) als ggml-Graphen auf Metal; bei Pyannote bleibt nur
+die sequenzielle LSTM-Rekurrenz auf der CPU — über Gates, die pro Layer in
+EINER GEMM für die ganze Sequenz vorprojiziert werden.
+
+Parität + Speedup (M3 Max Metal, C-Paritätstools):
+
+| Modell | CPU-Referenz | Metal-Graph | Speedup | Parität |
+|---|---|---|---|---|
+| TitaNet (6,5 s Audio) | 9,48 s | **0,030 s** | **312×** | cosine = 1.000000 |
+| Pyannote (11 s Audio) | 0,68 s | **0,130 s** | **5,3×** | T identisch, 99,85 % argmax, Turns identisch |
+
+Die Pyannote-Restabweichung (max|Δlogp| 0,34 an 1/650 Übergangs-Frames) ist
+F32-Summationsreihenfolge, durch 4 sättigende BiLSTM-Schichten verstärkt —
+turn-level wirkungslos. `testGPUParity` (Device-gated) prüft auf dem Gerät
+cosine ≥ 0,999 und identische Turn-Sequenzen (±1 Frame). **iPad-Lauf steht
+aus** (Gerät war beim letzten Versuch getrennt): `PARAKEET_BENCH_DEST=device
+bash scripts/benchmark.sh`.
+
 ## Diarization-Testaudio
 
 `Tests/ParakeetKitBenchmarks/Resources/voice-{ryan,serena}.wav` sind zwei
