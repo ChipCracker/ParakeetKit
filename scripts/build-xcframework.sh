@@ -37,6 +37,8 @@ for headers in "$OUT"/*/Headers; do
 module CParakeet {
     header "parakeet.h"
     header "firered_vad.h"
+    header "titanet.h"
+    header "pyannote_seg.h"
     export *
 }
 EOF
