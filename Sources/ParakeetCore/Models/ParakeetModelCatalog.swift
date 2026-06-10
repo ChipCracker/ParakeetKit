@@ -72,6 +72,21 @@ public final class ParakeetModelCatalog: @unchecked Sendable {
         quantization: .f16, repo: repo, fileName: "parakeet-tdt-0.6b-v3.gguf",
         approxBytes: 1_260 * 1_000_000, subtitle: "~1.26 GB · full precision")
 
-    public static let builtins: [ParakeetModelSpec] = [q4_K, q5_0, q8_0, f16]
+    // MARK: Diarization models (speaker embeddings + segmentation)
+
+    public static let titanetLarge = ParakeetModelSpec.huggingFace(
+        id: "titanet-large", displayName: "TitaNet Large", family: "Diarization",
+        quantization: .f16, repo: "cstr/titanet-large-GGUF",
+        fileName: "titanet-large.gguf", approxBytes: 44 * 1_000_000,
+        subtitle: "~44 MB · speaker embeddings (192-d)")
+
+    public static let pyannoteSegmentation = ParakeetModelSpec.huggingFace(
+        id: "pyannote-seg-3.0", displayName: "Pyannote Segmentation 3.0", family: "Diarization",
+        quantization: .custom("F32"), repo: "cstr/pyannote-v3-segmentation-GGUF",
+        fileName: "pyannote-seg-3.0.gguf", approxBytes: 6 * 1_000_000,
+        subtitle: "~6 MB · speaker-change segmentation")
+
+    public static let builtins: [ParakeetModelSpec] = [q4_K, q5_0, q8_0, f16,
+                                                       titanetLarge, pyannoteSegmentation]
     public static let recommended = q4_K
 }

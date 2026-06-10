@@ -15,10 +15,13 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(ParakeetModelCatalog.f16.fileName, "parakeet-tdt-0.6b-v3.gguf")
     }
 
-    func testDefaultCatalogHasFourBuiltins() {
+    func testDefaultCatalogBuiltins() {
         let catalog = ParakeetModelCatalog()
-        XCTAssertEqual(catalog.all.count, 4)
+        XCTAssertEqual(catalog.all.count, 6)   // 4 ASR quants + 2 diarization models
         XCTAssertNotNil(catalog.spec(id: "parakeet-tdt-0.6b-v3-q8_0"))
+        XCTAssertNotNil(catalog.spec(id: "titanet-large"))
+        XCTAssertNotNil(catalog.spec(id: "pyannote-seg-3.0"))
+        XCTAssertEqual(ParakeetModelCatalog.titanetLarge.family, "Diarization")
     }
 
     func testRegisterCustomModel() {
@@ -28,7 +31,7 @@ final class ModelCatalogTests: XCTestCase {
             quantization: .custom("Q5_K"), repo: "me/custom-GGUF",
             fileName: "custom.gguf", approxBytes: 100_000_000)
         catalog.register(custom)
-        XCTAssertEqual(catalog.all.count, 5)
+        XCTAssertEqual(catalog.all.count, 7)
         XCTAssertEqual(catalog.spec(id: "custom-asr")?.displayName, "Q5_K")
     }
 }

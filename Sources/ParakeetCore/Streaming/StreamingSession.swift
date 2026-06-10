@@ -17,12 +17,16 @@ public actor StreamingSession {
     /// (Typically: TitaNet embedding → online clustering → optional DB match.)
     /// Return nil when undecided — no `.speaker` event is emitted then.
     public typealias SpeakerAttribution = @Sendable ([Float]) async -> (id: Int, name: String?)?
+    /// Final-pass diarization hook: enriches the finish() transcript with
+    /// word-level speakers/turns from the full session audio.
+    public typealias SpeakerFinalize = @Sendable ([Float], ParakeetTranscript) async -> ParakeetTranscript
 
     private let config: StreamingConfig
     private let vad: VADGating
     private let transcribe: Transcribe
     private let transcribeLong: Transcribe
     private let attributeSpeaker: SpeakerAttribution?
+    private let finalizeSpeakers: SpeakerFinalize?
     private var committedSegmentIndex = 0
 
     private var continuation: AsyncStream<StreamingEvent>.Continuation?
@@ -54,12 +58,14 @@ public actor StreamingSession {
                 vad: VADGating = NoOpVADGate(),
                 transcribe: @escaping Transcribe,
                 transcribeLong: Transcribe? = nil,
-                attributeSpeaker: SpeakerAttribution? = nil) {
+                attributeSpeaker: SpeakerAttribution? = nil,
+                finalizeSpeakers: SpeakerFinalize? = nil) {
         self.config = config
         self.vad = vad
         self.transcribe = transcribe
         self.transcribeLong = transcribeLong ?? transcribe
         self.attributeSpeaker = attributeSpeaker
+        self.finalizeSpeakers = finalizeSpeakers
     }
 
     /// The hot event stream. Call once; events flow until `finish()`.
@@ -268,12 +274,17 @@ public actor StreamingSession {
     }
 
     /// Stops the session: runs the final `transcribeLong()` pass over the full
-    /// audio, emits `.finalized`, then closes the event stream.
+    /// audio (plus the diarization final pass when configured), emits
+    /// `.finalized` + `.finalizedTranscript`, then closes the event stream.
     public func finish() async {
         let audio = fullAudio
         if !audio.isEmpty {
-            let result = await transcribeLong(audio)
+            var result = await transcribeLong(audio)
+            if let finalizeSpeakers {
+                result = await finalizeSpeakers(audio, result)
+            }
             continuation?.yield(.finalized(result.text.trimmingCharacters(in: .whitespacesAndNewlines)))
+            continuation?.yield(.finalizedTranscript(result))
         }
         continuation?.finish()
     }

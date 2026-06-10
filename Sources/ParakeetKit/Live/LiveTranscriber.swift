@@ -10,22 +10,49 @@
 import Foundation
 import ParakeetCore
 
+/// Native diarization for a live session. Models come from the catalog
+/// (`ParakeetModelCatalog.titanetLarge` / `.pyannoteSegmentation`) via
+/// `ModelDownloader`.
+public struct LiveDiarization: Sendable {
+    /// TitaNet-Large GGUF (speaker embeddings, required).
+    public var titanetModelURL: URL
+    /// Pyannote segmentation GGUF — enables the word-level final pass. nil = off.
+    public var pyannoteModelURL: URL?
+    /// Directory of enrolled speaker profiles — enables named recognition. nil = off.
+    public var speakerDBDirectory: URL?
+    public var options: DiarizationOptions
+
+    public init(titanetModelURL: URL, pyannoteModelURL: URL? = nil,
+                speakerDBDirectory: URL? = nil, options: DiarizationOptions = .init()) {
+        self.titanetModelURL = titanetModelURL
+        self.pyannoteModelURL = pyannoteModelURL
+        self.speakerDBDirectory = speakerDBDirectory
+        self.options = options
+    }
+}
+
 public actor LiveTranscriber {
     private let engine: ParakeetEngine
     private let config: StreamingConfig
     private let vadModelURL: URL?
+    private let diarization: LiveDiarization?
 
     private var recorder: AudioRecorder?
     private var session: StreamingSession?
+    private var diarizer: Diarizer?
 
     /// `vadModelURL` defaults to the bundled firered-stream-vad.gguf. Pass `nil`
-    /// to disable VAD gating (whole audio treated as speech).
+    /// to disable VAD gating (whole audio treated as speech). `diarization`
+    /// enables speaker attribution (`.speaker` events, word-level speakers in
+    /// `.finalizedTranscript`).
     public init(engine: ParakeetEngine,
                 config: StreamingConfig = .init(),
-                vadModelURL: URL? = FireRedVAD.bundledModelURL) {
+                vadModelURL: URL? = FireRedVAD.bundledModelURL,
+                diarization: LiveDiarization? = nil) {
         self.engine = engine
         self.config = config
         self.vadModelURL = vadModelURL
+        self.diarization = diarization
     }
 
     /// Requests mic permission, starts the AVAudioEngine, feeds blocks into a
@@ -69,6 +96,27 @@ public actor LiveTranscriber {
         return await session.acceptedText
     }
 
+    /// Enrolls a named speaker from a voice sample (≥ ~1 s) into the
+    /// configured speaker DB — future sessions resolve the name via
+    /// `.speaker` events / `SpeakerTurn.name`.
+    public func enrollSpeaker(name: String, samples: [Float]) async throws {
+        guard let diarizer = await currentDiarizer() else {
+            throw ParakeetError.modelLoadFailed("diarization not configured")
+        }
+        try await diarizer.enroll(name: name, samples: samples)
+    }
+
+    private func currentDiarizer() async -> Diarizer? {
+        if let diarizer { return diarizer }
+        guard let diarization else { return nil }
+        diarizer = try? await Diarizer.make(
+            titanetModelPath: diarization.titanetModelURL.path,
+            pyannoteModelPath: diarization.pyannoteModelURL?.path,
+            speakerDBDirectory: diarization.speakerDBDirectory,
+            options: diarization.options)
+        return diarizer
+    }
+
     private func makeSession() async -> StreamingSession {
         let vad: VADGating
         if let url = vadModelURL, let v = try? await FireRedVAD.make(modelPath: url.path) {
@@ -77,11 +125,21 @@ public actor LiveTranscriber {
             vad = NoOpVADGate()
         }
         let engine = self.engine
+
+        var attributeSpeaker: StreamingSession.SpeakerAttribution? = nil
+        var finalizeSpeakers: StreamingSession.SpeakerFinalize? = nil
+        if let diarizer = await currentDiarizer() {
+            attributeSpeaker = { await diarizer.attribute($0) }
+            finalizeSpeakers = { await diarizer.finalize(audio: $0, transcript: $1) }
+        }
+
         return StreamingSession(
             config: config,
             vad: vad,
             transcribe: { await engine.transcribe($0) },
-            transcribeLong: { await engine.transcribeLong($0) })
+            transcribeLong: { await engine.transcribeLong($0) },
+            attributeSpeaker: attributeSpeaker,
+            finalizeSpeakers: finalizeSpeakers)
     }
 }
 

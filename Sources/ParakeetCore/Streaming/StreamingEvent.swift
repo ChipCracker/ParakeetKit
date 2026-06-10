@@ -32,4 +32,7 @@ public enum StreamingEvent: Sendable {
     /// `name` is set when the speaker DB recognised an enrolled voice.
     /// Source note: new case in 1.2 — exhaustive switches need an update.
     case speaker(segmentIndex: Int, id: Int, name: String?)
+    /// Full final transcript (follows `.finalized`): word timestamps and —
+    /// when diarization ran — word-level speakers and speaker turns.
+    case finalizedTranscript(ParakeetTranscript)
 }
