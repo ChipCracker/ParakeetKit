@@ -135,12 +135,33 @@ public actor Diarizer {
     /// Enrolls (or refines) a named speaker from a voice sample and persists
     /// it in the SpeakerDB. Throws when no DB is configured.
     public func enroll(name: String, samples: [Float]) async throws {
-        guard let db else { throw ParakeetError.invalidEmbedding }
+        guard let db else { throw ParakeetError.modelLoadFailed("speaker DB not configured") }
         guard let embedding = await embedder.embed(samples) else {
             throw ParakeetError.invalidEmbedding
         }
         try db.enroll(name: name, embedding: embedding)
-        // Re-resolve cached cluster names so the new profile applies now.
+        reresolveNames(db: db)
+    }
+
+    /// Names a SESSION cluster: persists its centroid (running mean over all
+    /// of the speaker's utterances — typically more robust than a single
+    /// sample) as a profile. Applies immediately to this instance (future
+    /// `.speaker` events and the final pass); other instances pick the
+    /// profile up when their SpeakerDB loads, i.e. from their next session.
+    public func enrollCluster(id: Int, name: String) async throws {
+        guard let db else { throw ParakeetError.modelLoadFailed("speaker DB not configured") }
+        guard clusterer.clusters.indices.contains(id) else {
+            throw ParakeetError.invalidEmbedding
+        }
+        try db.enroll(name: name, embedding: clusterer.clusters[id].centroid)
+        reresolveNames(db: db)
+        // Deterministic: after a running-mean refinement the threshold match
+        // could fall just short — the named cluster keeps its name regardless.
+        names[id] = name
+    }
+
+    /// Re-resolves the cluster→name cache against the DB (after enrollments).
+    private func reresolveNames(db: SpeakerDB) {
         names.removeAll()
         for index in 0..<clusterer.speakerCount {
             if let match = db.match(clusterer.clusters[index].centroid,

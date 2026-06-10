@@ -38,6 +38,18 @@ final class DiarizationBenchmarkTests: XCTestCase {
         XCTAssertNotEqual(r1?.id, s?.id, "second voice must get its own ID")
         XCTAssertEqual(r1?.name, "ryan", "enrolled profile must resolve")
 
+        // Cluster naming (badge-tap flow): serena's centroid becomes a
+        // profile, applies in-session AND persists for fresh instances.
+        if let serenaID = s?.id {
+            try await diarizer.enrollCluster(id: serenaID, name: "serena")
+            let renamed = await diarizer.attribute(serena)
+            XCTAssertEqual(renamed?.name, "serena", "cluster name must apply in-session")
+            let fresh = try await Diarizer.make(titanetModelPath: titanet,
+                                                speakerDBDirectory: dbDir)
+            let recognised = await fresh.attribute(serena)
+            XCTAssertEqual(recognised?.name, "serena", "profile must persist across instances")
+        }
+
         BenchJSON.write(["ryanIDs": "\(r1?.id ?? -1)/\(r2?.id ?? -1)",
                          "serenaID": "\(s?.id ?? -1)",
                          "resolvedName": r1?.name ?? "nil"],

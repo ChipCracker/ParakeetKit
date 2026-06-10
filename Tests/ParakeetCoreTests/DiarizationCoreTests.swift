@@ -84,6 +84,25 @@ final class DiarizationCoreTests: XCTestCase {
         XCTAssertEqual(try SpeakerDB(directory: dir).count, 0)  // file gone too
     }
 
+    /// Centroid→profile composition (the enrollCluster semantics): a cluster
+    /// centroid built from noisy samples of one voice enrolls as a profile
+    /// that matches further samples of that voice — including after reload.
+    func testClusterCentroidEnrollsAsMatchingProfile() throws {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        var clusterer = SpeakerClusterer(mergeThreshold: 0.5)
+        XCTAssertEqual(clusterer.assign(voiceA), 0)
+        XCTAssertEqual(clusterer.assign(noisy(voiceA, 0.2)), 0)
+
+        let db = try SpeakerDB(directory: dir)
+        try db.enroll(name: "alice", embedding: clusterer.clusters[0].centroid)
+
+        XCTAssertEqual(db.match(noisy(voiceA, 0.1))?.name, "alice")
+        XCTAssertNil(db.match(voiceB))
+        XCTAssertEqual(try SpeakerDB(directory: dir).match(voiceA)?.name, "alice")
+    }
+
     func testSpeakerDBRejectsDegenerateEmbedding() throws {
         let dir = tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

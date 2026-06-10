@@ -106,6 +106,19 @@ public actor LiveTranscriber {
         try await diarizer.enroll(name: name, samples: samples)
     }
 
+    /// Names a speaker cluster of the current session (e.g. "speaker #2" from
+    /// a `.speaker` event): its centroid becomes a persistent profile.
+    /// Applies immediately to THIS instance — future `.speaker` events and
+    /// the final pass carry the name; other LiveTranscriber instances see the
+    /// profile from their next session (the diarizer is cached per instance,
+    /// the SpeakerDB loads at init).
+    public func enrollSpeaker(name: String, fromClusterID id: Int) async throws {
+        guard let diarizer = await currentDiarizer() else {
+            throw ParakeetError.modelLoadFailed("diarization not configured")
+        }
+        try await diarizer.enrollCluster(id: id, name: name)
+    }
+
     private func currentDiarizer() async -> Diarizer? {
         if let diarizer { return diarizer }
         guard let diarization else { return nil }
