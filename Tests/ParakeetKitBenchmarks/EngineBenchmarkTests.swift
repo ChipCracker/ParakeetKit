@@ -80,13 +80,30 @@ final class EngineBenchmarkTests: XCTestCase {
         let engine = try await ParakeetEngine.make(modelPath: model,
                                                    useGPU: ParakeetEngine.preferredUseGPU)
 
-        let result = await engine.transcribeLong(long)
-        let wer = WordErrorRate.wer(reference: reference, hypothesis: result.text)
+        // Old default path (per-chunk z-norm, 20 s/2 s) vs. the new streamed
+        // default (global z-norm, 30 s/5 s). The binary's own heuristic
+        // (30 s/2 s) stays in the run as a watchdog: it loses words at chunk
+        // boundaries today — if a future xcframework fixes it, its WER drops
+        // to ~0 and transcribeLong could delegate to it again.
+        let chunked = await engine.transcribeChunked(long, chunkSeconds: 20, overlapSeconds: 2)
+        let streamed = await engine.transcribeLong(long)                              // 30/5
+        let heuristic = await engine.transcribeLong(long, chunkSeconds: 0, overlapSeconds: -1)
+        let chunkedWER = WordErrorRate.wer(reference: reference, hypothesis: chunked.text)
+        let streamedWER = WordErrorRate.wer(reference: reference, hypothesis: streamed.text)
+        let heuristicWER = WordErrorRate.wer(reference: reference, hypothesis: heuristic.text)
 
-        let bench = EngineBenchResult(name: "long-audio-transcribeLong", wer: wer, transcript: result)
-        BenchJSON.write([bench], name: "long-audio")
+        BenchJSON.write([
+            EngineBenchResult(name: "long-audio-chunked-20-2", wer: chunkedWER, transcript: chunked),
+            EngineBenchResult(name: "long-audio-streamed-30-5-default", wer: streamedWER, transcript: streamed),
+            EngineBenchResult(name: "long-audio-streamed-binary-heuristic", wer: heuristicWER, transcript: heuristic),
+        ], name: "long-audio")
 
-        XCTAssertLessThanOrEqual(wer, 0.30, "long-form transcript degraded: \(result.text)")
+        XCTAssertLessThanOrEqual(streamedWER, chunkedWER + 0.02,
+                                 "streamed default degraded vs chunked: \(streamed.text)")
+        XCTAssertLessThanOrEqual(streamedWER, 0.30)
+        // 66 s with 30 s chunks / 5 s overlap → 3 encoder passes; this also
+        // catches a broken counter delta (streamed doesn't reset counters).
+        XCTAssertEqual(streamed.encoderRuns, 3)
     }
 }
 #endif

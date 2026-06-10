@@ -1,0 +1,20 @@
+[
+  {
+    "audioSeconds" : 66,
+    "decoderSteps" : 548,
+    "encoderRuns" : 4,
+    "name" : "long-audio-chunked-20-2",
+    "processingSeconds" : 11.9325670003891,
+    "rtf" : 0.18079646970286514,
+    "wer" : 0
+  },
+  {
+    "audioSeconds" : 66,
+    "decoderSteps" : 260,
+    "encoderRuns" : 3,
+    "name" : "long-audio-streamed-default",
+    "processingSeconds" : 7.051019906997681,
+    "rtf" : 0.10683363495451031,
+    "wer" : 0.16666666666666666
+  }
+]

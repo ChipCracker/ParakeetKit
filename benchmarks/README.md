@@ -55,3 +55,21 @@ also eher leicht vorteilhaft (Upstream: ~+10 % CPU), auf Metal klar belegt
 (1,61×, bit-identisch, upstream PERFORMANCE.md). `useFlashAttention: nil`
 (Default) koppelt Flash an `useGPU`: an auf Geräten (Metal), aus auf dem
 CPU-/Simulator-Pfad — konservativ, explizit überschreibbar.
+
+### B2 `transcribeLong` → streamed 30 s/5 s (`…-opt2-streamed`)
+
+jfk×6 (66 s, lückenlos):
+
+| Variante | WER | RTF | enc | dec |
+|---|---|---|---|---|
+| chunked 20/2 (alter Default) | 0 | 0,160 | 4 | 548 |
+| **streamed 30/5 (neuer Default)** | **0** | **0,117** | 3 | 269 |
+| streamed Binary-Heuristik 30/2 | 0,167 | 0,106 | 3 | 260 |
+
+Befund: Die streamed-API ist bei gleicher Qualität ~27 % schneller als chunked
+(globale z-norm, ein Mel-Pass, kein doppelt dekodierter Overlap — dec halbiert).
+**Aber:** Die im Binary eingebaute Default-Heuristik (30 s Chunk, 2 s Overlap)
+verliert nachweislich Wörter an den Chunk-Grenzen (WER 0,167) — deshalb setzt
+`transcribeLong` explizit 30 s/5 s statt der Heuristik. Die Heuristik-Variante
+läuft als Watchdog im Benchmark mit: Fällt ihr WER nach einem
+xcframework-Update auf ~0, kann wieder delegiert werden.

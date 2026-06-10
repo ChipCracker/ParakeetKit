@@ -1,0 +1,29 @@
+[
+  {
+    "audioSeconds" : 66,
+    "decoderSteps" : 548,
+    "encoderRuns" : 4,
+    "name" : "long-audio-chunked-20-2",
+    "processingSeconds" : 10.586346983909607,
+    "rtf" : 0.16039919672590314,
+    "wer" : 0
+  },
+  {
+    "audioSeconds" : 66,
+    "decoderSteps" : 269,
+    "encoderRuns" : 3,
+    "name" : "long-audio-streamed-30-5-default",
+    "processingSeconds" : 7.694330930709839,
+    "rtf" : 0.1165807716774218,
+    "wer" : 0
+  },
+  {
+    "audioSeconds" : 66,
+    "decoderSteps" : 260,
+    "encoderRuns" : 3,
+    "name" : "long-audio-streamed-binary-heuristic",
+    "processingSeconds" : 7.025413990020752,
+    "rtf" : 0.10644566651546594,
+    "wer" : 0.16666666666666666
+  }
+]

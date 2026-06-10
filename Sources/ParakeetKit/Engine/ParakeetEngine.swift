@@ -92,9 +92,42 @@ public actor ParakeetEngine {
         }
     }
 
-    /// Transcribes long audio in overlapping windows (TDT chunking).
-    public func transcribeLong(_ samples: [Float], chunkSeconds: Int = 20,
-                               overlapSeconds: Int = 2) -> ParakeetTranscript {
+    /// Transcribes long audio NeMo-streamed: mel + z-norm over the FULL audio
+    /// (feature distribution identical to single-pass), encoder in overlapping
+    /// chunks, one TDT decode — same quality as chunked at ~0.6× the cost
+    /// (one mel pass, no double-decoded overlap; see benchmarks/README.md).
+    ///
+    /// Defaults are 30 s / 5 s: 30 s windows keep v3's features in
+    /// distribution; the binary's own heuristic overlap (2 s) measurably
+    /// loses words at chunk boundaries, 5 s does not.
+    public func transcribeLong(_ samples: [Float], chunkSeconds: Int = 30,
+                               overlapSeconds: Int = 5) -> ParakeetTranscript {
+        guard !samples.isEmpty else { return .empty }
+        let audioSeconds = Double(samples.count) / 16_000.0
+        // parakeet_transcribe_streamed does NOT reset the run counters the way
+        // _ex/_chunked do — measure the delta around the call.
+        let enc0 = Int(parakeet_last_encoder_runs(ctx))
+        let dec0 = Int(parakeet_last_decoder_steps(ctx))
+        return samples.withUnsafeBufferPointer { buf -> ParakeetTranscript in
+            let t0 = Date()
+            guard let res = parakeet_transcribe_streamed(ctx, buf.baseAddress, Int32(buf.count), 0,
+                                                         Int32(chunkSeconds), Int32(overlapSeconds)) else {
+                return .empty
+            }
+            let processing = Date().timeIntervalSince(t0)
+            defer { parakeet_result_free(res) }
+            return Self.convert(res.pointee,
+                                encoderRuns: max(0, Int(parakeet_last_encoder_runs(ctx)) - enc0),
+                                decoderSteps: max(0, Int(parakeet_last_decoder_steps(ctx)) - dec0),
+                                audioSeconds: audioSeconds,
+                                processingSeconds: processing)
+        }
+    }
+
+    /// Legacy long-form path: per-chunk mel z-norm (drifts vs. single-pass on
+    /// long audio) — kept for comparison benchmarks and compatibility.
+    public func transcribeChunked(_ samples: [Float], chunkSeconds: Int = 20,
+                                  overlapSeconds: Int = 2) -> ParakeetTranscript {
         guard !samples.isEmpty else { return .empty }
         let audioSeconds = Double(samples.count) / 16_000.0
         return samples.withUnsafeBufferPointer { buf -> ParakeetTranscript in
