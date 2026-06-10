@@ -26,9 +26,17 @@ public actor ParakeetEngine {
 
     /// Loads a GGUF model. Runs synchronously (several seconds) — call via
     /// `make(...)` to stay off-main.
-    public init(modelPath: String, useGPU: Bool = true, threads: Int? = nil) throws {
+    ///
+    /// `useFlashAttention` fuses the encoder's relative-position attention into
+    /// one `flash_attn_ext` kernel per layer — bit-identical output, ~1.6×
+    /// faster encoder on Metal (upstream-verified for parakeet-tdt-0.6b-v3).
+    /// On the CPU backend the fused kernel is ~18 % SLOWER (measured, see
+    /// benchmarks/), so `nil` (default) enables it exactly when `useGPU` is on.
+    public init(modelPath: String, useGPU: Bool = true, threads: Int? = nil,
+                useFlashAttention: Bool? = nil) throws {
         var params = parakeet_context_default_params()
         params.use_gpu = useGPU
+        params.use_flash = useFlashAttention ?? useGPU
         params.verbosity = 1
         if let threads {
             params.n_threads = Int32(threads)
@@ -44,18 +52,23 @@ public actor ParakeetEngine {
     }
 
     /// Creates the engine on a background thread (model loading blocks).
+    /// `useFlashAttention: nil` (default) follows `useGPU` — see `init`.
     public static func make(modelPath: String, useGPU: Bool = true,
-                            threads: Int? = nil) async throws -> ParakeetEngine {
+                            threads: Int? = nil,
+                            useFlashAttention: Bool? = nil) async throws -> ParakeetEngine {
         try await Task.detached(priority: .userInitiated) {
-            try ParakeetEngine(modelPath: modelPath, useGPU: useGPU, threads: threads)
+            try ParakeetEngine(modelPath: modelPath, useGPU: useGPU, threads: threads,
+                               useFlashAttention: useFlashAttention)
         }.value
     }
 
     /// Convenience: load a downloaded `ParakeetModelSpec`.
     public static func make(spec: ParakeetModelSpec, downloadedAt url: URL,
                             useGPU: Bool = ParakeetEngine.preferredUseGPU,
-                            threads: Int? = nil) async throws -> ParakeetEngine {
-        try await make(modelPath: url.path, useGPU: useGPU, threads: threads)
+                            threads: Int? = nil,
+                            useFlashAttention: Bool? = nil) async throws -> ParakeetEngine {
+        try await make(modelPath: url.path, useGPU: useGPU, threads: threads,
+                       useFlashAttention: useFlashAttention)
     }
 
     public var sampleRate: Int { Int(parakeet_sample_rate(ctx)) }

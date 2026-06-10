@@ -1,0 +1,11 @@
+[
+  {
+    "audioSeconds" : 66,
+    "decoderSteps" : 548,
+    "encoderRuns" : 4,
+    "name" : "long-audio-transcribeLong",
+    "processingSeconds" : 10.084735989570618,
+    "rtf" : 0.15279903014500937,
+    "wer" : 0
+  }
+]

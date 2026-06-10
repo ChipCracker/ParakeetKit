@@ -27,6 +27,51 @@ final class EngineBenchmarkTests: XCTestCase {
         XCTAssertEqual(result.encoderRuns, 1)
     }
 
+    /// Flash attention must not change the transcript (upstream: bit-identical
+    /// on Metal). Engines are loaded sequentially — 2× 466 MB not at once.
+    /// Simulator timings are noisy CPU numbers (±30 % between runs), so each
+    /// variant is measured 3× and the median recorded; the hard assert is parity.
+    func testFlashAttentionParity() async throws {
+        let model = try BenchEnv.requireModelOrSkip()
+        let jfk = try BenchEnv.loadJFK()
+
+        func median3(_ engine: ParakeetEngine) async -> (text: String, seconds: Double) {
+            var text = ""
+            var times: [Double] = []
+            for _ in 0..<3 {
+                let r = await engine.transcribe(jfk)
+                text = r.text
+                times.append(r.processingSeconds)
+            }
+            return (text, times.sorted()[1])
+        }
+
+        var noFlashText = ""
+        var noFlashSeconds = 0.0
+        do {
+            let engine = try await ParakeetEngine.make(modelPath: model,
+                                                       useGPU: ParakeetEngine.preferredUseGPU,
+                                                       useFlashAttention: false)
+            (noFlashText, noFlashSeconds) = await median3(engine)
+        }
+
+        let engine = try await ParakeetEngine.make(modelPath: model,
+                                                   useGPU: ParakeetEngine.preferredUseGPU,
+                                                   useFlashAttention: true)
+        let (flashText, flashSeconds) = await median3(engine)
+
+        let wer = WordErrorRate.wer(reference: BenchEnv.jfkReference, hypothesis: flashText)
+        let bench = ["name": "flash-attention-parity", "wer": "\(wer)",
+                     "flashMedianSeconds": "\(flashSeconds)",
+                     "noFlashMedianSeconds": "\(noFlashSeconds)"]
+        BenchJSON.write(bench, name: "flash-parity")
+
+        XCTAssertEqual(WordErrorRate.normalize(noFlashText), WordErrorRate.normalize(flashText),
+                       "flash attention changed the transcript")
+        XCTAssertLessThanOrEqual(wer, 0.10)
+        print("[bench] flash=\(flashSeconds)s noflash=\(noFlashSeconds)s (median of 3)")
+    }
+
     func testLongAudio() async throws {
         let model = try BenchEnv.requireModelOrSkip()
         let jfk = try BenchEnv.loadJFK()

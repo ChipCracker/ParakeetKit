@@ -45,3 +45,13 @@ Interpretation: Die Live-Pipeline transkribiert das ~6,6-fache des ingestierten
 Audios (synthetisch bis ~11×, da die 16-s-Utterance den quadratischen
 Preview-Aufwand zeigt). Genau hier setzen die Optimierungen B3–B5 an; B1/B2
 verbessern die Engine-Seite (Flash Attention, streamed-API).
+
+### B1 Flash Attention (`…-opt1-flash`)
+
+Transkript-Parität bestätigt (normalisiert identisch, WER 0). CPU-Zeiten im
+Simulator streuen stark (Einzelläufe ±20–30 % in beide Richtungen); der Test
+misst daher den Median aus 3 Läufen: flash 1,15 s vs. no-flash 1,86 s — auf CPU
+also eher leicht vorteilhaft (Upstream: ~+10 % CPU), auf Metal klar belegt
+(1,61×, bit-identisch, upstream PERFORMANCE.md). `useFlashAttention: nil`
+(Default) koppelt Flash an `useGPU`: an auf Geräten (Metal), aus auf dem
+CPU-/Simulator-Pfad — konservativ, explizit überschreibbar.
