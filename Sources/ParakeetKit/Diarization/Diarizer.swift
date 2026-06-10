@@ -13,13 +13,25 @@ import ParakeetCore
 public struct DiarizationOptions: Sendable {
     /// Cosine threshold for joining an existing speaker cluster (TitaNet: ~0.5).
     public var mergeThreshold: Float = 0.5
+    /// Speaker-count budget: once this many clusters exist, every utterance is
+    /// assigned to the nearest one — set it to the KNOWN number of speakers
+    /// (e.g. 2 for an interview) to pin the session to exactly that many IDs.
     public var maxSpeakers: Int = 8
     /// Cosine threshold for recognising an enrolled (named) speaker.
     public var dbMatchThreshold: Float = 0.55
     /// Windows shorter than this are not embedded (unstable embeddings).
     public var minEmbeddingSeconds: Double = 0.6
     public var threads: Int = 2
-    public init() {}
+
+    public init(mergeThreshold: Float = 0.5, maxSpeakers: Int = 8,
+                dbMatchThreshold: Float = 0.55, minEmbeddingSeconds: Double = 0.6,
+                threads: Int = 2) {
+        self.mergeThreshold = mergeThreshold
+        self.maxSpeakers = max(1, maxSpeakers)
+        self.dbMatchThreshold = dbMatchThreshold
+        self.minEmbeddingSeconds = minEmbeddingSeconds
+        self.threads = threads
+    }
 }
 
 public actor Diarizer {
