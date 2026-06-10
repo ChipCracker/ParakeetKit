@@ -14,7 +14,12 @@ let remoteURL = "https://github.com/ChipCracker/ParakeetKit/releases/download/pa
 let remoteChecksum = "475d9eec37f42b629bbd8fafe63e0d51bbcdd62257ea6d33ad285e479db61d10"
 
 let localXCFrameworkPath = "Frameworks/Parakeet.xcframework"
-let hasLocal = FileManager.default.fileExists(atPath: localXCFrameworkPath)
+// Resolve relative to THIS manifest, not the process CWD: when another
+// project (e.g. ParakeetDemo) resolves the package, the CWD is not the
+// package root and a CWD-relative check would silently fall back to the
+// remote binary.
+let packageRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
+let hasLocal = FileManager.default.fileExists(atPath: packageRoot + "/" + localXCFrameworkPath)
 let forceLocal = ProcessInfo.processInfo.environment["PARAKEETKIT_LOCAL_XCFRAMEWORK"] != nil
 let useLocal = forceLocal || hasLocal || remoteChecksum.isEmpty
 
