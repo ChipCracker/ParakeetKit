@@ -53,6 +53,13 @@ public final class SpeakerDB: @unchecked Sendable {
         return profiles.count
     }
 
+    /// All enrolled profiles, sorted by name — e.g. for embedding maps
+    /// (PCA/t-SNE) or exports.
+    public var allProfiles: [SpeakerProfile] {
+        lock.lock(); defer { lock.unlock() }
+        return profiles.values.sorted { $0.name < $1.name }
+    }
+
     /// Best cosine match at or above `threshold`, or nil.
     public func match(_ embedding: [Float], threshold: Float = 0.5) -> (name: String, score: Float)? {
         guard let unit = SpeakerClusterer.normalized(embedding) else { return nil }
