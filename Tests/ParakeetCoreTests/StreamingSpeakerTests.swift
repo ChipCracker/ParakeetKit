@@ -52,12 +52,12 @@ final class StreamingSpeakerTests: XCTestCase {
         await session.finish()
 
         var committedIndices = 0
-        var speakerEvents: [(segmentIndex: Int, id: Int, name: String?)] = []
+        var speakerEvents: [(segmentIndex: Int, id: Int, name: String?, seconds: Double)] = []
         for await event in events {
             switch event {
             case .committed: committedIndices += 1
-            case .speaker(let segmentIndex, let id, let name):
-                speakerEvents.append((segmentIndex, id, name))
+            case .speaker(let segmentIndex, let id, let name, let seconds):
+                speakerEvents.append((segmentIndex, id, name, seconds))
             default: break
             }
         }
@@ -68,6 +68,8 @@ final class StreamingSpeakerTests: XCTestCase {
         XCTAssertEqual(speakerEvents.map(\.id), [0, 1])
         XCTAssertEqual(speakerEvents[0].name, "alice")
         XCTAssertNil(speakerEvents[1].name)
+        // Event duration mirrors the attributed window (talk-time shares).
+        XCTAssertTrue(speakerEvents.allSatisfy { $0.seconds >= 2 }, "\(speakerEvents)")
 
         // The attribution window covers the committed speech (≥ 2 s each).
         let windows = await attribution.windows

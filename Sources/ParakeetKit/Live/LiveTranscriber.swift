@@ -55,6 +55,11 @@ public actor LiveTranscriber {
         self.diarization = diarization
     }
 
+    /// Audio of the last finished session (16 kHz mono, capped at the config's
+    /// `maxFullSeconds`) — e.g. for post-session playback. Replaced on the
+    /// next `start()`.
+    public private(set) var lastSessionAudio: [Float] = []
+
     /// Requests mic permission, starts the AVAudioEngine, feeds blocks into a
     /// StreamingSession and returns its event stream. The stream finishes after
     /// `stop()` runs the final transcribeLong() pass.
@@ -62,6 +67,7 @@ public actor LiveTranscriber {
         guard await AudioRecorder.requestPermission() else {
             throw ParakeetError.microphonePermissionDenied
         }
+        lastSessionAudio = []
         let session = await makeSession()
         self.session = session
         let stream = await session.events()
@@ -79,6 +85,7 @@ public actor LiveTranscriber {
         recorder?.stop()
         recorder = nil
         await session?.finish()
+        if let session { lastSessionAudio = await session.sessionAudio() }
         session = nil
     }
 

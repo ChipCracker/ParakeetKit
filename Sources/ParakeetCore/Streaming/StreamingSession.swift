@@ -270,8 +270,13 @@ public actor StreamingSession {
     private func emitSpeaker(for speech: [Float], segmentIndex: Int) async {
         guard let attributeSpeaker else { return }
         guard let speaker = await attributeSpeaker(speech) else { return }
-        continuation?.yield(.speaker(segmentIndex: segmentIndex, id: speaker.id, name: speaker.name))
+        continuation?.yield(.speaker(segmentIndex: segmentIndex, id: speaker.id, name: speaker.name,
+                                     seconds: Double(speech.count) / Double(config.sampleRate)))
     }
+
+    /// Full session audio (16 kHz mono, capped at `maxFullSeconds`) — readable
+    /// after `finish()` for playback/export; cleared by `reset()`.
+    public func sessionAudio() -> [Float] { fullAudio }
 
     /// Stops the session: runs the final `transcribeLong()` pass over the full
     /// audio (plus the diarization final pass when configured), emits

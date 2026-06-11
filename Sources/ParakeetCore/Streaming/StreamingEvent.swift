@@ -29,9 +29,11 @@ public enum StreamingEvent: Sendable {
     case finalized(String)
     /// Speaker attribution for a committed segment, emitted shortly after its
     /// `.committed` event. `segmentIndex` counts committed segments from 0;
-    /// `name` is set when the speaker DB recognised an enrolled voice.
+    /// `name` is set when the speaker DB recognised an enrolled voice;
+    /// `seconds` is the attributed window's duration — accumulate it per id
+    /// for live talk-time shares.
     /// Source note: new case in 1.2 — exhaustive switches need an update.
-    case speaker(segmentIndex: Int, id: Int, name: String?)
+    case speaker(segmentIndex: Int, id: Int, name: String?, seconds: Double)
     /// Full final transcript (follows `.finalized`): word timestamps and —
     /// when diarization ran — word-level speakers and speaker turns.
     case finalizedTranscript(ParakeetTranscript)
