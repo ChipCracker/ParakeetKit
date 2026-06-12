@@ -5,7 +5,7 @@
 import Foundation
 
 /// A word with timestamps (from the TDT duration head).
-public struct ParakeetWord: Identifiable, Sendable, Hashable {
+public struct ParakeetWord: Identifiable, Sendable, Hashable, Codable {
     public let id: UUID
     public let text: String
     public let start: TimeInterval   // seconds
@@ -48,8 +48,9 @@ public struct SpeakerTurn: Sendable, Hashable, Codable {
     }
 }
 
-/// Result of a transcription.
-public struct ParakeetTranscript: Sendable {
+/// Result of a transcription. Codable so clients can archive results
+/// (e.g. a recordings library) without their own DTOs.
+public struct ParakeetTranscript: Sendable, Codable {
     public let text: String
     public let words: [ParakeetWord]
     /// Encoder forward passes for this call (1 per window, n per chunk).
