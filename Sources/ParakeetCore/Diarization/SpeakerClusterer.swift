@@ -60,6 +60,60 @@ public struct SpeakerClusterer: Sendable {
 
     public mutating func reset() { clusters.removeAll() }
 
+    /// Offline agglomerative clustering (average linkage over cosine) — the
+    /// final pass has ALL embeddings at once, so this beats the
+    /// order-sensitive online `assign`. Merges the closest pair while its
+    /// similarity reaches `stopThreshold`, and keeps merging regardless while
+    /// more than `maxClusters` remain. Returns one label per input (0-based,
+    /// in order of each cluster's first member); degenerate (near-zero)
+    /// embeddings get -1. Deterministic; n stays small (≤ ~100), so the
+    /// naive O(n³) loop is fine.
+    public static func agglomerate(_ embeddings: [[Float]],
+                                   stopThreshold: Float,
+                                   maxClusters: Int) -> [Int] {
+        struct Working {
+            var centroid: [Float]     // L2-normalized mean
+            var sum: [Float]          // un-normalized running sum
+            var members: [Int]
+        }
+
+        var labels = [Int](repeating: -1, count: embeddings.count)
+        var working: [Working] = []
+        for (i, embedding) in embeddings.enumerated() {
+            guard let unit = normalized(embedding) else { continue }
+            working.append(Working(centroid: unit, sum: unit, members: [i]))
+        }
+        let cap = max(1, maxClusters)
+
+        while working.count > 1 {
+            var bestA = 0, bestB = 1
+            var bestSim: Float = -2
+            for a in 0..<working.count {
+                for b in (a + 1)..<working.count {
+                    let sim = dot(working[a].centroid, working[b].centroid)
+                    if sim > bestSim { bestSim = sim; bestA = a; bestB = b }
+                }
+            }
+            guard bestSim >= stopThreshold || working.count > cap else { break }
+            var merged = working[bestA]
+            let other = working[bestB]
+            for i in 0..<min(merged.sum.count, other.sum.count) {
+                merged.sum[i] += other.sum[i]
+            }
+            merged.centroid = normalized(merged.sum) ?? merged.centroid
+            merged.members += other.members
+            working.remove(at: bestB)
+            working[bestA] = merged
+        }
+
+        // Stable labels: clusters numbered by their earliest member.
+        let ordered = working.sorted { ($0.members.min() ?? 0) < ($1.members.min() ?? 0) }
+        for (label, cluster) in ordered.enumerated() {
+            for member in cluster.members { labels[member] = label }
+        }
+        return labels
+    }
+
     private mutating func merge(_ unit: [Float], into index: Int) {
         var cluster = clusters[index]
         let n = Float(cluster.count)

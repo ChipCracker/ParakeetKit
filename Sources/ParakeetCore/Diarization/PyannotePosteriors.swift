@@ -62,6 +62,109 @@ public struct PyannotePosteriors: Sendable {
         return score.firstIndex(of: maxScore)
     }
 
+    /// Overlap-aware speaker turns: one independent activity track per local
+    /// speaker, binarized with hysteresis (on at `onThreshold`, off below
+    /// `offThreshold`), gaps shorter than `gapTolerance` bridged, runs
+    /// shorter than `minTurnSeconds` dropped. Unlike `speakerTurns()` the
+    /// results MAY overlap in time — that is the point: concurrent speech
+    /// yields one turn per active speaker.
+    public func perSpeakerTurns(onThreshold: Float = 0.5,
+                                offThreshold: Float = 0.35,
+                                gapTolerance: Double = 0.25,
+                                minTurnSeconds: Double = 0.3)
+        -> [(start: Double, end: Double, localSpeaker: Int)] {
+        let gapFrames = Int(gapTolerance / Self.frameDuration)
+        var turns: [(start: Double, end: Double, localSpeaker: Int)] = []
+
+        for speaker in 0..<Self.localSpeakerCount {
+            var runs: [(start: Int, end: Int)] = []   // [start, end) in frames
+            var runStart: Int? = nil
+            var active = false
+            for f in 0..<frameCount {
+                let level = activity(atFrame: f).speakers[speaker]
+                if active {
+                    if level < offThreshold {
+                        runs.append((runStart!, f))
+                        runStart = nil
+                        active = false
+                    }
+                } else if level >= onThreshold {
+                    runStart = f
+                    active = true
+                }
+            }
+            if let start = runStart { runs.append((start, frameCount)) }
+
+            // Bridge short gaps, then drop short runs.
+            var merged: [(start: Int, end: Int)] = []
+            for run in runs {
+                if let last = merged.last, run.start - last.end <= gapFrames {
+                    merged[merged.count - 1].end = run.end
+                } else {
+                    merged.append(run)
+                }
+            }
+            for run in merged {
+                let start = startTime + Double(run.start) * Self.frameDuration
+                let end = startTime + Double(run.end) * Self.frameDuration
+                if end - start >= minTurnSeconds {
+                    turns.append((start, end, speaker))
+                }
+            }
+        }
+        return turns.sorted { $0.start < $1.start }
+    }
+
+    /// Longest sub-interval of [from, to) in which ONLY `localSpeaker` is
+    /// active (its activity ≥ `offThreshold`, every other speaker below it) —
+    /// purity masking for speaker embeddings over overlapped turns. Returns
+    /// nil when no pure stretch reaches `minSeconds`.
+    public func pureRange(forLocal localSpeaker: Int, from: Double, to: Double,
+                          offThreshold: Float = 0.35,
+                          minSeconds: Double = 0.6) -> (start: Double, end: Double)? {
+        let f0 = max(0, Int((from - startTime) / Self.frameDuration))
+        let f1 = min(frameCount, Int(ceil((to - startTime) / Self.frameDuration)))
+        guard f1 > f0 else { return nil }
+
+        var best: (start: Int, end: Int)? = nil
+        var runStart: Int? = nil
+        func close(_ end: Int) {
+            guard let start = runStart else { return }
+            if end - start > ((best?.end ?? 0) - (best?.start ?? 0)) {
+                best = (start, end)
+            }
+            runStart = nil
+        }
+        for f in f0..<f1 {
+            let speakers = activity(atFrame: f).speakers
+            let pure = speakers[localSpeaker] >= offThreshold
+                && speakers.enumerated().allSatisfy { $0.offset == localSpeaker || $0.element < offThreshold }
+            if pure {
+                if runStart == nil { runStart = f }
+            } else {
+                close(f)
+            }
+        }
+        close(f1)
+
+        guard let range = best else { return nil }
+        let start = startTime + Double(range.start) * Self.frameDuration
+        let end = startTime + Double(range.end) * Self.frameDuration
+        return end - start >= minSeconds ? (start, end) : nil
+    }
+
+    /// Mean activity of a local speaker in a small window around `time`
+    /// (absolute seconds) — tie-breaker when a word overlaps several turns.
+    public func speakerActivity(forLocal localSpeaker: Int, around time: Double,
+                                halfWindow: Double = 0.1) -> Float {
+        let f0 = max(0, Int((time - halfWindow - startTime) / Self.frameDuration))
+        let f1 = min(frameCount, Int(ceil((time + halfWindow - startTime) / Self.frameDuration)))
+        guard f1 > f0 else { return 0 }
+        var sum: Float = 0
+        for f in f0..<f1 { sum += activity(atFrame: f).speakers[localSpeaker] }
+        return sum / Float(f1 - f0)
+    }
+
     /// Contiguous single-speaker regions (local IDs) over the whole buffer:
     /// per frame the dominant non-silence speaker, merged into runs, dropping
     /// runs shorter than `minTurnSeconds`. Used by the final pass to slice

@@ -149,4 +149,92 @@ final class DiarizationCoreTests: XCTestCase {
     func testPosteriorsRejectsShortBuffer() {
         XCTAssertNil(PyannotePosteriors(logPosteriors: [0, 0, 0], frameCount: 1))
     }
+
+    // MARK: - Agglomerative clustering (final pass v2)
+
+    func testAgglomerateSeparatesThreeGroups() {
+        let voiceC: [Float] = [0, 0, 1, 0]
+        let embeddings = [voiceA, noisy(voiceA, 0.2),
+                          voiceB, noisy(voiceB, 0.15),
+                          voiceC, noisy(voiceC, 0.2)]
+        let labels = SpeakerClusterer.agglomerate(embeddings, stopThreshold: 0.5, maxClusters: 8)
+        // Labels are ordered by first member: A=0, B=1, C=2.
+        XCTAssertEqual(labels, [0, 0, 1, 1, 2, 2])
+    }
+
+    func testAgglomerateHonorsMaxClusters() {
+        let voiceC: [Float] = [0, 0, 1, 0]
+        // Three mutually orthogonal voices, threshold would keep them apart —
+        // the cap forces a merge down to two clusters.
+        let labels = SpeakerClusterer.agglomerate([voiceA, voiceB, voiceC],
+                                                  stopThreshold: 0.9, maxClusters: 2)
+        XCTAssertEqual(Set(labels).count, 2)
+        XCTAssertFalse(labels.contains(-1))
+    }
+
+    func testAgglomerateEdgeCases() {
+        XCTAssertEqual(SpeakerClusterer.agglomerate([], stopThreshold: 0.5, maxClusters: 4), [])
+        XCTAssertEqual(SpeakerClusterer.agglomerate([voiceA], stopThreshold: 0.5, maxClusters: 4), [0])
+        // Degenerate embedding keeps -1, valid neighbours still cluster.
+        let labels = SpeakerClusterer.agglomerate([voiceA, [0, 0, 0, 0], noisy(voiceA, 0.2)],
+                                                  stopThreshold: 0.5, maxClusters: 4)
+        XCTAssertEqual(labels, [0, -1, 0])
+    }
+
+    // MARK: - Overlap-aware segmentation (final pass v2)
+
+    func testPerSpeakerTurnsYieldOverlap() {
+        // spk0 alone ×6 (class 1), spk0+spk1 ×4 (class 3), spk1 alone ×6 (2):
+        // two OVERLAPPING turns instead of an argmax cut.
+        let p = posteriors(classes: [1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2])
+        let frame = PyannotePosteriors.frameDuration
+        let turns = p.perSpeakerTurns(gapTolerance: 0, minTurnSeconds: 2 * frame)
+        XCTAssertEqual(turns.count, 2)
+        XCTAssertEqual(turns[0].localSpeaker, 0)
+        XCTAssertEqual(turns[0].start, 0, accuracy: 1e-9)
+        XCTAssertEqual(turns[0].end, 10 * frame, accuracy: 1e-6)
+        XCTAssertEqual(turns[1].localSpeaker, 1)
+        XCTAssertEqual(turns[1].start, 6 * frame, accuracy: 1e-6)
+        XCTAssertEqual(turns[1].end, 16 * frame, accuracy: 1e-6)
+        // Overlap is real: spk0 still runs while spk1 already speaks.
+        XCTAssertGreaterThan(turns[0].end, turns[1].start)
+    }
+
+    func testPerSpeakerTurnsBridgeShortGaps() {
+        // spk0 ×4, one silence frame, spk0 ×4 — bridged into one turn;
+        // without tolerance it splits.
+        let classes = [1, 1, 1, 1, 0, 1, 1, 1, 1]
+        let p = posteriors(classes: classes)
+        let frame = PyannotePosteriors.frameDuration
+        let bridged = p.perSpeakerTurns(gapTolerance: 2 * frame, minTurnSeconds: 2 * frame)
+        XCTAssertEqual(bridged.count, 1)
+        XCTAssertEqual(bridged[0].end, 9 * frame, accuracy: 1e-6)
+        let split = p.perSpeakerTurns(gapTolerance: 0, minTurnSeconds: 2 * frame)
+        XCTAssertEqual(split.count, 2)
+    }
+
+    func testPureRangeMasksOverlap() {
+        // spk0 ×6 pure, then ×4 overlapped with spk1.
+        let p = posteriors(classes: [1, 1, 1, 1, 1, 1, 3, 3, 3, 3])
+        let frame = PyannotePosteriors.frameDuration
+        let pure = p.pureRange(forLocal: 0, from: 0, to: 10 * frame,
+                               minSeconds: 2 * frame)
+        XCTAssertNotNil(pure)
+        XCTAssertEqual(pure!.start, 0, accuracy: 1e-9)
+        XCTAssertEqual(pure!.end, 6 * frame, accuracy: 1e-6)
+        // spk1 has no pure stretch in this range at all.
+        XCTAssertNil(p.pureRange(forLocal: 1, from: 0, to: 10 * frame,
+                                 minSeconds: 2 * frame))
+    }
+
+    func testSpeakerActivityWindow() {
+        let p = posteriors(classes: [1, 1, 1, 1, 3, 3, 3, 3])
+        let frame = PyannotePosteriors.frameDuration
+        // In the overlap zone both speakers are highly active.
+        let mid = 6 * frame
+        XCTAssertGreaterThan(p.speakerActivity(forLocal: 0, around: mid, halfWindow: frame), 0.9)
+        XCTAssertGreaterThan(p.speakerActivity(forLocal: 1, around: mid, halfWindow: frame), 0.9)
+        // In the pure zone speaker 1 is quiet.
+        XCTAssertLessThan(p.speakerActivity(forLocal: 1, around: 2 * frame, halfWindow: frame), 0.1)
+    }
 }
