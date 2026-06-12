@@ -242,3 +242,18 @@ mit Metal-TitaNet auf Geräten (~0,03–0,1 s/Embedding) unerheblich.
 Neue Core-Units decken AHC (Gruppen, maxClusters-Zwang, degenerierte
 Vektoren), perSpeakerTurns (Overlap, gap-merge), pureRange und
 speakerActivity ab.
+
+### Overlap-Test (Nachtrag, 2026-06-12)
+
+`testFinalPassOverlappingSpeech`: zwei neue qwen3-tts-Stimmen
+(`voice-dylan.wav` 13,6 s, `voice-sohee.wav` 10,2 s) werden mit **3 s
+echtem Doppelsprechen** gemischt (Ränder still-getrimmt). Ergebnis
+(Sim-CPU): `maxTurnOverlapSeconds 3.26` — der v2-Pass bildet die
+Überlappung als zeitlich überlappende Turns zweier Sprecher ab (der
+alte argmax-Pass konnte das strukturell nicht) — bei `soloAccuracy
+1.000` und exakt 2 Clustern auf den Solo-Strecken. Der Lauf deckte
+zudem einen v2-Bug auf: pyannote trackt dieselbe Stimme zeitweise auf
+zwei lokalen Slots (identische Aktivitätsspuren), was nach dem
+ID-Mapping Duplikat-Turns erzeugte — gleiche-Sprecher-Turns werden
+jetzt gemergt (Turns: 3-Sprecher 10→8, 2-Sprecher 6→5, Metriken
+unverändert).

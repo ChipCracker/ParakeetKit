@@ -179,6 +179,90 @@ final class DiarizationBenchmarkTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(coverage, 0.7, "labelled share of in-speech words: \(coverage)")
     }
 
+    /// REAL concurrent speech: dylan and sohee are mixed so sohee starts
+    /// 2 s before dylan ends. The v2 final pass must (a) express the zone as
+    /// time-overlapping turns of two speakers — the old argmax pass could
+    /// never produce that — and (b) keep the voices cleanly apart on their
+    /// solo stretches despite the contaminated middle.
+    func testFinalPassOverlappingSpeech() async throws {
+        let model = try await BenchEnv.resolveModelOrSkip()
+        let titanet = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.titanetLarge)
+        let pyannote = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.pyannoteSegmentation)
+
+        // TTS clips carry leading/trailing silence — trim it so the
+        // constructed overlap is REAL concurrent speech.
+        func trimmed(_ samples: [Float], threshold: Float = 0.01) -> [Float] {
+            guard let lead = samples.firstIndex(where: { abs($0) > threshold }),
+                  let trail = samples.lastIndex(where: { abs($0) > threshold }),
+                  trail > lead else { return samples }
+            return Array(samples[lead...trail])
+        }
+        let dylan = trimmed(try BenchEnv.loadVoice("voice-dylan"))
+        let sohee = trimmed(try BenchEnv.loadVoice("voice-sohee"))
+        let overlapSeconds = 3.0
+        let dylanEnd = Double(dylan.count) / 16_000
+        let soheeStart = dylanEnd - overlapSeconds
+        let offset = Int(soheeStart * 16_000)
+
+        var audio = [Float](repeating: 0, count: max(dylan.count, offset + sohee.count))
+        for (i, sample) in dylan.enumerated() { audio[i] += sample }
+        for (i, sample) in sohee.enumerated() { audio[offset + i] += sample }
+        for i in 0..<audio.count { audio[i] = max(-1, min(1, audio[i])) }
+        let soheeEnd = Double(offset + sohee.count) / 16_000
+
+        // Solo ground truth with a safety margin around the overlap zone.
+        let margin = 0.3
+        let dylanSolo = (start: 0.0, end: soheeStart - margin)
+        let soheeSolo = (start: dylanEnd + margin, end: soheeEnd)
+
+        let engine = try await ParakeetEngine.make(modelPath: model,
+                                                   useGPU: ParakeetEngine.preferredUseGPU)
+        let diarizer = try await Diarizer.make(titanetModelPath: titanet,
+                                               pyannoteModelPath: pyannote)
+        let transcript = await engine.transcribeLong(audio)
+        let enriched = await diarizer.finalize(audio: audio, transcript: transcript)
+
+        // (a) Overlapping turns of DIFFERENT speakers.
+        let turns = enriched.speakerTurns
+        var maxTurnOverlap = 0.0
+        for i in 0..<turns.count {
+            for k in (i + 1)..<turns.count where turns[i].speaker != turns[k].speaker {
+                let overlap = min(turns[i].end, turns[k].end) - max(turns[i].start, turns[k].start)
+                maxTurnOverlap = max(maxTurnOverlap, overlap)
+            }
+        }
+
+        // (b) Word mapping on the solo stretches.
+        var votes: [Int: [Int: Int]] = [:]                 // gt voice → cluster → n
+        var scored: [(gt: Int, cluster: Int)] = []
+        for word in enriched.words {
+            let mid = (word.start + word.end) / 2
+            let gt: Int
+            if mid >= dylanSolo.start && mid < dylanSolo.end { gt = 0 }
+            else if mid >= soheeSolo.start && mid < soheeSolo.end { gt = 1 }
+            else { continue }
+            guard let cluster = word.speaker else { continue }
+            votes[gt, default: [:]][cluster, default: 0] += 1
+            scored.append((gt, cluster))
+        }
+        let mapping = votes.compactMapValues { $0.max(by: { $0.value < $1.value })?.key }
+        let correct = scored.filter { mapping[$0.gt] == $0.cluster }.count
+        let soloAccuracy = scored.isEmpty ? 0 : Double(correct) / Double(scored.count)
+
+        BenchJSON.write(["maxTurnOverlapSeconds": String(format: "%.2f", maxTurnOverlap),
+                         "soloAccuracy": String(format: "%.3f", soloAccuracy),
+                         "mappedClusters": "\(Set(mapping.values).count)",
+                         "turns": "\(turns.count)"],
+                        name: "diarization-final-overlap")
+
+        XCTAssertGreaterThanOrEqual(maxTurnOverlap, 0.5,
+                                    "concurrent speech must yield overlapping turns: \(turns)")
+        XCTAssertEqual(Set(mapping.values).count, 2,
+                       "two voices on the solo stretches: \(votes)")
+        XCTAssertGreaterThanOrEqual(soloAccuracy, 0.9,
+                                    "solo accuracy \(soloAccuracy), votes \(votes)")
+    }
+
     /// Final pass over a ryan → serena → ryan conversation: pyannote turns +
     /// word labels separate both speakers and re-identify the first one.
     func testFinalPassLabelsWords() async throws {

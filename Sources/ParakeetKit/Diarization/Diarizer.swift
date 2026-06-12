@@ -292,10 +292,25 @@ public actor Diarizer {
             let localSpeaker: Int
             let speaker: Int
         }
-        let globalTurns: [GlobalTurn] = resolved.compactMap { turn in
+        let rawGlobalTurns: [GlobalTurn] = resolved.compactMap { turn in
             guard let label = turn.label, let id = globalForLabel[label] else { return nil }
             return GlobalTurn(start: turn.start, end: turn.end,
                               localSpeaker: turn.localSpeaker, speaker: id)
+        }
+        // Same-speaker turns that touch or overlap merge into one — pyannote
+        // sometimes tracks the SAME voice on two local slots (identical
+        // activity from a shared powerset class), which would otherwise
+        // surface as duplicate turns. Cross-speaker overlaps stay.
+        var globalTurns: [GlobalTurn] = []
+        for turn in rawGlobalTurns.sorted(by: { $0.start < $1.start }) {
+            if let last = globalTurns.last, last.speaker == turn.speaker,
+               turn.start <= last.end + 0.05 {
+                globalTurns[globalTurns.count - 1] = GlobalTurn(
+                    start: last.start, end: max(last.end, turn.end),
+                    localSpeaker: last.localSpeaker, speaker: last.speaker)
+            } else {
+                globalTurns.append(turn)
+            }
         }
         guard !globalTurns.isEmpty else { return transcript }
         let speakerTurns = globalTurns.map {
