@@ -92,6 +92,7 @@ public actor Diarizer {
 
     /// Final-pass tuning. Constants by design — the bench guards them.
     private enum Tuning {
+        static let segmentationWindowSeconds = 10.0  // pyannote runs windowed
         static let minTurnSeconds = 0.3        // keep short turns (they inherit)
         static let subWindowMinTurn = 6.0      // longer turns embed in windows
         static let subWindowLength = 4.0
@@ -99,6 +100,7 @@ public actor Diarizer {
         static let maxWindowsPerTurn = 6
         static let embeddingBudget = 96        // hard cap on embed() calls
         static let nearestWordSeconds = 0.5    // fallback for unlabelled words
+        static let sameSpeakerMergeGap = 0.3   // heal seams at window borders
     }
 
     /// StreamingSession.SpeakerFinalize, v2: overlap-aware pyannote turns
@@ -110,8 +112,35 @@ public actor Diarizer {
     /// centroid-based conflict-free name resolution.
     public func finalize(audio: [Float], transcript: ParakeetTranscript) async -> ParakeetTranscript {
         guard let segmenter, !audio.isEmpty else { return transcript }
-        guard let posteriors = await segmenter.posteriors(for: audio) else { return transcript }
-        let localTurns = posteriors.perSpeakerTurns(minTurnSeconds: Tuning.minTurnSeconds)
+
+        // pyannote runs in 10 s windows: its activations grow with T, so a
+        // single full-length pass over long recordings (a 17-minute take is
+        // ~0.5–1 GB of graph buffers) gets the app jetsam-killed — and 10 s
+        // is the model's training domain anyway. Local speaker slots are
+        // only meaningful per window; global identity comes from the
+        // embeddings, and the same-speaker merge heals the window seams.
+        let windowSamples = Int(Tuning.segmentationWindowSeconds * 16_000)
+        var segmentWindows: [PyannotePosteriors] = []
+        var cursor = 0
+        while cursor < audio.count {
+            let end = min(cursor + windowSamples, audio.count)
+            // A sub-second tail yields no stable turns — skip it.
+            if end - cursor < 16_000, !segmentWindows.isEmpty { break }
+            if let posterior = await segmenter.posteriors(for: Array(audio[cursor..<end]),
+                                                          startTime: Double(cursor) / 16_000) {
+                segmentWindows.append(posterior)
+            }
+            cursor = end
+        }
+        guard !segmentWindows.isEmpty else { return transcript }
+
+        var localTurns: [(start: Double, end: Double, localSpeaker: Int, windowIndex: Int)] = []
+        for (windowIndex, posterior) in segmentWindows.enumerated() {
+            for turn in posterior.perSpeakerTurns(minTurnSeconds: Tuning.minTurnSeconds) {
+                localTurns.append((turn.start, turn.end, turn.localSpeaker, windowIndex))
+            }
+        }
+        localTurns.sort { $0.start < $1.start }
         guard !localTurns.isEmpty else { return transcript }
 
         // --- Embedding windows: purity-masked, budgeted ---------------------
@@ -126,9 +155,10 @@ public actor Diarizer {
         for (i, turn) in localTurns.enumerated() {
             let duration = turn.end - turn.start
             if duration < Tuning.subWindowMinTurn {
-                let range = posteriors.pureRange(forLocal: turn.localSpeaker,
-                                                 from: turn.start, to: turn.end,
-                                                 minSeconds: options.minEmbeddingSeconds)
+                let range = segmentWindows[turn.windowIndex]
+                    .pureRange(forLocal: turn.localSpeaker,
+                               from: turn.start, to: turn.end,
+                               minSeconds: options.minEmbeddingSeconds)
                     ?? (start: turn.start, end: turn.end)
                 windows.append(Window(turnIndex: i, start: range.start, end: range.end))
             } else {
@@ -182,10 +212,12 @@ public actor Diarizer {
             var start: Double
             var end: Double
             let localSpeaker: Int
+            let windowIndex: Int
             var label: Int?
         }
         var resolved: [ResolvedTurn] = localTurns.map {
-            ResolvedTurn(start: $0.start, end: $0.end, localSpeaker: $0.localSpeaker, label: nil)
+            ResolvedTurn(start: $0.start, end: $0.end, localSpeaker: $0.localSpeaker,
+                         windowIndex: $0.windowIndex, label: nil)
         }
         var splits: [ResolvedTurn] = []
         for index in resolved.indices {
@@ -290,24 +322,30 @@ public actor Diarizer {
             let start: Double
             let end: Double
             let localSpeaker: Int
+            let windowIndex: Int
             let speaker: Int
         }
         let rawGlobalTurns: [GlobalTurn] = resolved.compactMap { turn in
             guard let label = turn.label, let id = globalForLabel[label] else { return nil }
             return GlobalTurn(start: turn.start, end: turn.end,
-                              localSpeaker: turn.localSpeaker, speaker: id)
+                              localSpeaker: turn.localSpeaker,
+                              windowIndex: turn.windowIndex, speaker: id)
         }
         // Same-speaker turns that touch or overlap merge into one — pyannote
         // sometimes tracks the SAME voice on two local slots (identical
-        // activity from a shared powerset class), which would otherwise
-        // surface as duplicate turns. Cross-speaker overlaps stay.
+        // activity from a shared powerset class), and the 10 s segmentation
+        // windows cut continuing turns at their borders (sub-minTurn
+        // snippets may vanish there). The gap tolerance heals those seams;
+        // cross-speaker overlaps stay. Merged turns keep the first window's
+        // index (activity queries clamp into it).
         var globalTurns: [GlobalTurn] = []
         for turn in rawGlobalTurns.sorted(by: { $0.start < $1.start }) {
             if let last = globalTurns.last, last.speaker == turn.speaker,
-               turn.start <= last.end + 0.05 {
+               turn.start <= last.end + Tuning.sameSpeakerMergeGap {
                 globalTurns[globalTurns.count - 1] = GlobalTurn(
                     start: last.start, end: max(last.end, turn.end),
-                    localSpeaker: last.localSpeaker, speaker: last.speaker)
+                    localSpeaker: last.localSpeaker,
+                    windowIndex: last.windowIndex, speaker: last.speaker)
             } else {
                 globalTurns.append(turn)
             }
@@ -329,10 +367,16 @@ public actor Diarizer {
                 speaker = overlapping[0].turn.speaker
             } else if overlapping.count > 1 {
                 // Concurrent speech: the locally more active voice wins.
-                speaker = overlapping.max(by: { a, b in
-                    posteriors.speakerActivity(forLocal: a.turn.localSpeaker, around: mid)
-                        < posteriors.speakerActivity(forLocal: b.turn.localSpeaker, around: mid)
-                })?.turn.speaker
+                // Local slots are only valid inside the turn's own
+                // segmentation window — clamp the query time into it.
+                func activity(_ turn: GlobalTurn) -> Float {
+                    let posterior = segmentWindows[turn.windowIndex]
+                    let lo = max(turn.start, posterior.startTime)
+                    let hi = min(turn.end, posterior.startTime + posterior.duration - 0.001)
+                    let query = min(max(mid, lo), max(lo, hi))
+                    return posterior.speakerActivity(forLocal: turn.localSpeaker, around: query)
+                }
+                speaker = overlapping.max(by: { activity($0.turn) < activity($1.turn) })?.turn.speaker
             } else {
                 func distance(_ turn: GlobalTurn) -> Double {
                     mid < turn.start ? turn.start - mid : max(0, mid - turn.end)

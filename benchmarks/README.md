@@ -257,3 +257,27 @@ zwei lokalen Slots (identische Aktivitätsspuren), was nach dem
 ID-Mapping Duplikat-Turns erzeugte — gleiche-Sprecher-Turns werden
 jetzt gemergt (Turns: 3-Sprecher 10→8, 2-Sprecher 6→5, Metriken
 unverändert).
+
+### Long-Audio-Fix (2026-06-12)
+
+Befund: Bei langen Offline-Aufnahmen (~17 min) wurde die App während
+„Sprecher zuordnen …“ vom System beendet (Jetsam). Ursache: pyannote
+lief über das GESAMTE Audio in einem Stück — die Aktivierungen wachsen
+linear mit T (SincNet-Zwischenausgabe allein ~0,5 GB bei 17 min, der
+ggml-Graph hält mehrere solcher Tensoren gleichzeitig).
+
+Fix: Die Segmentierung läuft jetzt in **10-s-Fenstern** (zugleich die
+Trainingsdomäne von pyannote-3.0); lokale Slots gelten pro Fenster,
+die globale Identität kommt wie gehabt aus TitaNet+AHC, und der
+Same-Speaker-Merge (Toleranz 0,3 s) heilt die Fensternähte.
+
+Neuer Wächter `testFinalPassLongAudio` (3,9 min Wechselrede, Sim-CPU):
+accuracy **1.000**, 2 Cluster, 40 Turns; ASR 26,7 s, Finalize 383 s —
+letzteres ist der CPU-Referenzpfad des Simulators (TitaNet-Hand-Loop);
+auf Geräten rechnet Metal-TitaNet dieselben ~50 Embeddings in Sekunden.
+Bestandstests unverändert grün (3-Sprecher 1.000/1.000, 2-Sprecher
+33/33). Bekannter Tradeoff: Fenstergrenzen können die ERKANNTE
+Overlap-Spanne verkürzen (Overlap-Test: ~3 s konstruiert → 0,56 s
+erkannt, wenn die Zone eine 10-s-Grenze überspannt) — der Test prüft
+seither die Existenz überlappender Turns (≥ 0,4 s); volle Spannen
+bräuchten überlappende Segmentierungsfenster (möglicher Folgeschritt).
