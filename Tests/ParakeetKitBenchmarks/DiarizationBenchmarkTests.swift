@@ -112,6 +112,73 @@ final class DiarizationBenchmarkTests: XCTestCase {
                         name: "diarization-gpu-parity")
     }
 
+    /// Three voices with recurrence (ryan serena aiden ryan serena): word
+    /// labels are scored against the known concatenation ground truth. The
+    /// majority mapping cluster→voice must be a bijection over three
+    /// clusters (recurrence re-identified) and the word-label accuracy must
+    /// clear 0.85.
+    func testFinalPassThreeSpeakers() async throws {
+        let model = try await BenchEnv.resolveModelOrSkip()
+        let titanet = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.titanetLarge)
+        let pyannote = try await BenchEnv.resolveDiarizationModelOrSkip(ParakeetModelCatalog.pyannoteSegmentation)
+
+        let voices = [try BenchEnv.loadVoice("voice-ryan"),
+                      try BenchEnv.loadVoice("voice-serena"),
+                      try BenchEnv.loadVoice("voice-aiden")]
+        let order = [0, 1, 2, 0, 1]
+        let gap = [Float](repeating: 0, count: Int(0.8 * 16_000))
+
+        var audio: [Float] = []
+        var truth: [(start: Double, end: Double, voice: Int)] = []
+        for (i, voice) in order.enumerated() {
+            if i > 0 { audio += gap }
+            let start = Double(audio.count) / 16_000
+            audio += voices[voice]
+            truth.append((start, Double(audio.count) / 16_000, voice))
+        }
+
+        let engine = try await ParakeetEngine.make(modelPath: model,
+                                                   useGPU: ParakeetEngine.preferredUseGPU)
+        let diarizer = try await Diarizer.make(titanetModelPath: titanet,
+                                               pyannoteModelPath: pyannote)
+
+        let t0 = Date()
+        let transcript = await engine.transcribeLong(audio)
+        let enriched = await diarizer.finalize(audio: audio, transcript: transcript)
+        let seconds = Date().timeIntervalSince(t0)
+
+        func truthVoice(at time: Double) -> Int? {
+            truth.first(where: { time >= $0.start && time < $0.end })?.voice
+        }
+        var votes: [Int: [Int: Int]] = [:]                 // voice → cluster → count
+        var scored: [(voice: Int, cluster: Int)] = []
+        var inSpeech = 0
+        for word in enriched.words {
+            let mid = (word.start + word.end) / 2
+            guard let voice = truthVoice(at: mid) else { continue }
+            inSpeech += 1
+            guard let cluster = word.speaker else { continue }
+            votes[voice, default: [:]][cluster, default: 0] += 1
+            scored.append((voice, cluster))
+        }
+        let mapping = votes.compactMapValues { $0.max(by: { $0.value < $1.value })?.key }
+        let correct = scored.filter { mapping[$0.voice] == $0.cluster }.count
+        let accuracy = scored.isEmpty ? 0 : Double(correct) / Double(scored.count)
+        let coverage = inSpeech == 0 ? 0 : Double(scored.count) / Double(inSpeech)
+
+        BenchJSON.write(["accuracy": String(format: "%.3f", accuracy),
+                         "coverage": String(format: "%.3f", coverage),
+                         "mappedClusters": "\(Set(mapping.values).count)",
+                         "turns": "\(enriched.speakerTurns.count)",
+                         "finalPassSeconds": String(format: "%.2f", seconds)],
+                        name: "diarization-final-3spk")
+
+        XCTAssertEqual(Set(mapping.values).count, 3,
+                       "three voices must map to three distinct clusters: \(votes)")
+        XCTAssertGreaterThanOrEqual(accuracy, 0.85, "word-label accuracy \(accuracy), votes \(votes)")
+        XCTAssertGreaterThanOrEqual(coverage, 0.7, "labelled share of in-speech words: \(coverage)")
+    }
+
     /// Final pass over a ryan → serena → ryan conversation: pyannote turns +
     /// word labels separate both speakers and re-identify the first one.
     func testFinalPassLabelsWords() async throws {

@@ -88,54 +88,245 @@ public actor Diarizer {
         return (id, names[id])
     }
 
-    // MARK: - Final pass (word level)
+    // MARK: - Final pass (word level), v2
 
-    /// StreamingSession.SpeakerFinalize: pyannote turns over the full audio,
-    /// one embedding per sufficiently long turn (clustered with the SAME
-    /// session clusterer → IDs match the live ones), words labelled by
-    /// best-overlap turn.
+    /// Final-pass tuning. Constants by design — the bench guards them.
+    private enum Tuning {
+        static let minTurnSeconds = 0.3        // keep short turns (they inherit)
+        static let subWindowMinTurn = 6.0      // longer turns embed in windows
+        static let subWindowLength = 4.0
+        static let subWindowHop = 2.0
+        static let maxWindowsPerTurn = 6
+        static let embeddingBudget = 96        // hard cap on embed() calls
+        static let nearestWordSeconds = 0.5    // fallback for unlabelled words
+    }
+
+    /// StreamingSession.SpeakerFinalize, v2: overlap-aware pyannote turns
+    /// (one per concurrently active speaker), purity-masked windowed TitaNet
+    /// embeddings, OFFLINE agglomerative clustering over all windows (the
+    /// online clusterer stays live-only), conservative turn splitting,
+    /// ID-mapping onto the session clusters (live IDs stay valid), activity
+    /// tie-breaking for overlapped words plus a nearest-turn fallback, and
+    /// centroid-based conflict-free name resolution.
     public func finalize(audio: [Float], transcript: ParakeetTranscript) async -> ParakeetTranscript {
         guard let segmenter, !audio.isEmpty else { return transcript }
         guard let posteriors = await segmenter.posteriors(for: audio) else { return transcript }
-        let localTurns = posteriors.speakerTurns(minTurnSeconds: options.minEmbeddingSeconds)
+        let localTurns = posteriors.perSpeakerTurns(minTurnSeconds: Tuning.minTurnSeconds)
         guard !localTurns.isEmpty else { return transcript }
 
-        // Embed + cluster each turn; remember the majority global ID per
-        // pyannote-local speaker so short turns inherit it.
-        var turnGlobal: [Int: Int] = [:]              // turn index → global id
-        var localVotes: [Int: [Int: Int]] = [:]       // local id → global id → votes
+        // --- Embedding windows: purity-masked, budgeted ---------------------
+        struct Window {
+            let turnIndex: Int
+            let start: Double
+            let end: Double
+            var mid: Double { (start + end) / 2 }
+            var duration: Double { end - start }
+        }
+        var windows: [Window] = []
         for (i, turn) in localTurns.enumerated() {
-            let s = max(0, Int(turn.start * 16_000))
-            let e = min(audio.count, Int(turn.end * 16_000))
-            guard e > s, let embedding = await embedder.embed(Array(audio[s..<e])) else { continue }
-            let id = clusterer.assign(embedding)
-            guard id >= 0 else { continue }
-            resolveName(for: id, embedding: embedding)
-            turnGlobal[i] = id
-            localVotes[turn.localSpeaker, default: [:]][id, default: 0] += 1
-        }
-        func inheritedGlobal(forLocal local: Int) -> Int? {
-            localVotes[local]?.max(by: { $0.value < $1.value })?.key
-        }
-
-        var speakerTurns: [SpeakerTurn] = []
-        for (i, turn) in localTurns.enumerated() {
-            guard let id = turnGlobal[i] ?? inheritedGlobal(forLocal: turn.localSpeaker) else { continue }
-            speakerTurns.append(SpeakerTurn(start: turn.start, end: turn.end,
-                                            speaker: id, name: names[id]))
-        }
-        guard !speakerTurns.isEmpty else { return transcript }
-
-        // Word → turn with the largest temporal overlap.
-        let words = transcript.words.map { word -> ParakeetWord in
-            var best: (overlap: Double, speaker: Int)? = nil
-            for turn in speakerTurns {
-                let overlap = min(word.end, turn.end) - max(word.start, turn.start)
-                if overlap > 0, overlap > (best?.overlap ?? 0) {
-                    best = (overlap, turn.speaker)
+            let duration = turn.end - turn.start
+            if duration < Tuning.subWindowMinTurn {
+                let range = posteriors.pureRange(forLocal: turn.localSpeaker,
+                                                 from: turn.start, to: turn.end,
+                                                 minSeconds: options.minEmbeddingSeconds)
+                    ?? (start: turn.start, end: turn.end)
+                windows.append(Window(turnIndex: i, start: range.start, end: range.end))
+            } else {
+                var hop = Tuning.subWindowHop
+                var count = Int((duration - Tuning.subWindowLength) / hop) + 1
+                if count > Tuning.maxWindowsPerTurn {
+                    count = Tuning.maxWindowsPerTurn
+                    hop = (duration - Tuning.subWindowLength) / Double(count - 1)
+                }
+                for k in 0..<count {
+                    let start = turn.start + Double(k) * hop
+                    windows.append(Window(turnIndex: i, start: start,
+                                          end: min(start + Tuning.subWindowLength, turn.end)))
                 }
             }
-            return word.with(speaker: best?.speaker)
+        }
+        // Budget: shave windows from the most-windowed turns first, so every
+        // turn keeps at least one.
+        while windows.count > Tuning.embeddingBudget {
+            var perTurn: [Int: [Int]] = [:]
+            for (k, window) in windows.enumerated() {
+                perTurn[window.turnIndex, default: []].append(k)
+            }
+            guard let richest = perTurn.max(by: { $0.value.count < $1.value.count }),
+                  richest.value.count > 1 else { break }
+            windows.remove(at: richest.value[richest.value.count / 2])
+        }
+
+        // --- Embed (≥ minEmbeddingSeconds only; short turns inherit later) --
+        var embeddings: [[Float]] = []
+        var meta: [(turnIndex: Int, mid: Double, duration: Double)] = []
+        let minSamples = Int(options.minEmbeddingSeconds * 16_000)
+        for window in windows {
+            let s = max(0, Int(window.start * 16_000))
+            let e = min(audio.count, Int(window.end * 16_000))
+            guard e - s >= minSamples,
+                  let embedding = await embedder.embed(Array(audio[s..<e])) else { continue }
+            embeddings.append(embedding)
+            meta.append((window.turnIndex, window.mid, window.duration))
+        }
+        guard !embeddings.isEmpty else { return transcript }
+
+        // --- Offline clustering over ALL windows ----------------------------
+        let labels = SpeakerClusterer.agglomerate(embeddings,
+                                                  stopThreshold: options.mergeThreshold,
+                                                  maxClusters: options.maxSpeakers)
+
+        // Per-turn label: duration-weighted majority; conservative split on a
+        // clean prefix/suffix label change (≥ 2 windows on each side).
+        struct ResolvedTurn {
+            var start: Double
+            var end: Double
+            let localSpeaker: Int
+            var label: Int?
+        }
+        var resolved: [ResolvedTurn] = localTurns.map {
+            ResolvedTurn(start: $0.start, end: $0.end, localSpeaker: $0.localSpeaker, label: nil)
+        }
+        var splits: [ResolvedTurn] = []
+        for index in resolved.indices {
+            let mine = meta.enumerated()
+                .filter { $0.element.turnIndex == index && labels[$0.offset] >= 0 }
+                .sorted { $0.element.mid < $1.element.mid }
+            guard !mine.isEmpty else { continue }
+            let sequence = mine.map { labels[$0.offset] }
+            if let cut = cleanLabelChange(sequence) {
+                let splitTime = (mine[cut - 1].element.mid + mine[cut].element.mid) / 2
+                var tail = resolved[index]
+                tail.start = splitTime
+                tail.label = sequence.last
+                resolved[index].end = splitTime
+                resolved[index].label = sequence.first
+                splits.append(tail)
+            } else {
+                var weight: [Int: Double] = [:]
+                for entry in mine {
+                    weight[labels[entry.offset], default: 0] += entry.element.duration
+                }
+                resolved[index].label = weight.max(by: { $0.value < $1.value })?.key
+            }
+        }
+        resolved += splits
+        // Short/unembedded turns inherit the duration-weighted majority label
+        // of their LOCAL pyannote speaker.
+        var localWeight: [Int: [Int: Double]] = [:]
+        for turn in resolved where turn.label != nil {
+            localWeight[turn.localSpeaker, default: [:]][turn.label!, default: 0] += turn.end - turn.start
+        }
+        for index in resolved.indices where resolved[index].label == nil {
+            resolved[index].label = localWeight[resolved[index].localSpeaker]?
+                .max(by: { $0.value < $1.value })?.key
+        }
+        resolved = resolved.filter { $0.label != nil }.sorted { $0.start < $1.start }
+        guard !resolved.isEmpty else { return transcript }
+
+        // --- Map AHC clusters onto session clusters (live IDs stay valid) ---
+        var clusterSum: [Int: [Float]] = [:]
+        var clusterDuration: [Int: Double] = [:]
+        var clusterFirst: [Int: Double] = [:]
+        for (k, label) in labels.enumerated() where label >= 0 {
+            if clusterSum[label] == nil {
+                clusterSum[label] = embeddings[k]
+            } else {
+                for j in 0..<min(clusterSum[label]!.count, embeddings[k].count) {
+                    clusterSum[label]![j] += embeddings[k][j]
+                }
+            }
+            clusterDuration[label, default: 0] += meta[k].duration
+            clusterFirst[label] = min(clusterFirst[label] ?? .infinity, meta[k].mid)
+        }
+        let sessionWasEmpty = clusterer.speakerCount == 0
+        let mappingOrder = clusterSum.keys.sorted {
+            sessionWasEmpty
+                ? clusterFirst[$0]! < clusterFirst[$1]!                  // stable: first heard = id 0
+                : clusterDuration[$0]! > clusterDuration[$1]!            // big clusters claim live ids first
+        }
+        var globalForLabel: [Int: Int] = [:]
+        var takenLive = Set<Int>()
+        for label in mappingOrder {
+            let centroid = clusterSum[label]!
+            var assigned: Int? = nil
+            if !sessionWasEmpty {
+                var bestSim = options.mergeThreshold
+                for liveIndex in 0..<clusterer.speakerCount where !takenLive.contains(liveIndex) {
+                    if let sim = clusterer.similarity(of: centroid, toSpeaker: liveIndex), sim >= bestSim {
+                        bestSim = sim
+                        assigned = liveIndex
+                    }
+                }
+            }
+            if let live = assigned {
+                takenLive.insert(live)
+                globalForLabel[label] = live
+            } else {
+                let id = clusterer.assign(centroid)
+                if id >= 0 {
+                    takenLive.insert(id)
+                    globalForLabel[label] = id
+                }
+            }
+        }
+
+        // --- Names: centroid vs. DB, conflict-free; manual names win --------
+        if let db {
+            var claims: [(id: Int, name: String, score: Float)] = []
+            for (label, id) in globalForLabel where names[id] == nil {
+                if let match = db.match(clusterSum[label]!, threshold: options.dbMatchThreshold) {
+                    claims.append((id, match.name, match.score))
+                }
+            }
+            for claim in claims.sorted(by: { $0.score > $1.score })
+            where names[claim.id] == nil && !names.values.contains(claim.name) {
+                names[claim.id] = claim.name
+            }
+        }
+
+        // --- Speaker turns (may overlap in time) ----------------------------
+        struct GlobalTurn {
+            let start: Double
+            let end: Double
+            let localSpeaker: Int
+            let speaker: Int
+        }
+        let globalTurns: [GlobalTurn] = resolved.compactMap { turn in
+            guard let label = turn.label, let id = globalForLabel[label] else { return nil }
+            return GlobalTurn(start: turn.start, end: turn.end,
+                              localSpeaker: turn.localSpeaker, speaker: id)
+        }
+        guard !globalTurns.isEmpty else { return transcript }
+        let speakerTurns = globalTurns.map {
+            SpeakerTurn(start: $0.start, end: $0.end, speaker: $0.speaker, name: names[$0.speaker])
+        }
+
+        // --- Words: overlap → activity tie-break → nearest fallback ---------
+        let words = transcript.words.map { word -> ParakeetWord in
+            let mid = (word.start + word.end) / 2
+            let overlapping = globalTurns.compactMap { turn -> (turn: GlobalTurn, overlap: Double)? in
+                let overlap = min(word.end, turn.end) - max(word.start, turn.start)
+                return overlap > 0 ? (turn, overlap) : nil
+            }
+            let speaker: Int?
+            if overlapping.count == 1 {
+                speaker = overlapping[0].turn.speaker
+            } else if overlapping.count > 1 {
+                // Concurrent speech: the locally more active voice wins.
+                speaker = overlapping.max(by: { a, b in
+                    posteriors.speakerActivity(forLocal: a.turn.localSpeaker, around: mid)
+                        < posteriors.speakerActivity(forLocal: b.turn.localSpeaker, around: mid)
+                })?.turn.speaker
+            } else {
+                func distance(_ turn: GlobalTurn) -> Double {
+                    mid < turn.start ? turn.start - mid : max(0, mid - turn.end)
+                }
+                let nearest = globalTurns.min(by: { distance($0) < distance($1) })
+                speaker = (nearest.map(distance) ?? .infinity) <= Tuning.nearestWordSeconds
+                    ? nearest?.speaker : nil
+            }
+            return word.with(speaker: speaker)
         }
 
         // Dominant speaker by labelled word time.
@@ -146,6 +337,16 @@ public actor Diarizer {
         let dominant = spoken.max(by: { $0.value < $1.value })?.key
 
         return transcript.with(words: words, speaker: .some(dominant), speakerTurns: speakerTurns)
+    }
+
+    /// Index of a clean prefix/suffix label change (exactly two values,
+    /// ordered a…a b…b with at least two windows on each side), or nil.
+    private func cleanLabelChange(_ sequence: [Int]) -> Int? {
+        guard sequence.count >= 4, Set(sequence).count == 2 else { return nil }
+        guard let cut = sequence.firstIndex(where: { $0 != sequence[0] }) else { return nil }
+        guard cut >= 2, sequence.count - cut >= 2 else { return nil }
+        let tail = sequence[cut...]
+        return tail.allSatisfy { $0 == sequence[cut] } ? cut : nil
     }
 
     // MARK: - Enrollment / lifecycle

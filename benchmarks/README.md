@@ -209,3 +209,36 @@ Befunde:
 - Test-Infrastruktur: 5 sequenzielle 1,26-GB-Engine-Loads sprengen das
   iPadOS-Prozesslimit (`posix_memalign failed`) — Single-Shot und Long-Audio
   teilen sich deshalb eine Engine-Instanz pro Suite.
+
+## Finalize v2 — Diarization-Final-Pass (2026-06-12)
+
+Umbau von `Diarizer.finalize`: overlap-fähige pyannote-Turns (Hysterese je
+lokalem Sprecher, gap-merge 0,25 s), purity-maskierte Fenster-Embeddings
+(4 s/2 s-Hop ab 6 s Turn-Länge, globales Budget 96), **agglomeratives
+Clustering** über alle Fenster (Average-Linkage-Cosine, `maxSpeakers` als
+echtes Stop-Kriterium) mit konservativem Turn-Split, ID-Mapping auf die
+Session-Cluster (Live-IDs bleiben gültig), Aktivitäts-Tiebreak für
+überlappte Wörter + Nearest-Turn-Fallback (≤ 0,5 s) und zentroid-basiertem,
+konfliktfreiem Namens-Resolve. Neue Testdaten: `voice-aiden.wav`
+(qwen3-tts CustomVoice, 8,5 s).
+
+Simulator iPhone 16 (CPU-Pfad), q4_K + TitaNet + pyannote:
+
+| Test | Metrik | alt | v2 |
+|---|---|---|---|
+| 3 Sprecher (ryan serena aiden ryan serena) | Wort-Accuracy | 1.000 | 1.000 |
+| | Coverage (gelabelte In-Speech-Wörter) | 0.943 | **1.000** |
+| | Cluster (Soll 3, beide Wiederkehrer re-identifiziert) | 3 | 3 |
+| | finalPass s (inkl. ASR, Sim-CPU) | 41,9 | 52,2 |
+| 2 Sprecher (Bestandstest) | labelledWords | 31/33 | **33/33** |
+| | distinctSpeakers | 2 | 2 |
+
+Einordnung: Das synthetische Konkat-Audio enthält keine echten
+Überlappungen — der Overlap-Teil (per-Sprecher-Turns, Purity-Masking)
+zeigt seinen Gewinn erst auf realen Gesprächen; die Tabelle belegt
+Regressionsfreiheit plus den Coverage-Gewinn des Nearest-Fallbacks.
+Mehrkosten ~10 s im Sim-CPU-Pfad durch zusätzliche Fenster-Embeddings;
+mit Metal-TitaNet auf Geräten (~0,03–0,1 s/Embedding) unerheblich.
+Neue Core-Units decken AHC (Gruppen, maxClusters-Zwang, degenerierte
+Vektoren), perSpeakerTurns (Overlap, gap-merge), pureRange und
+speakerActivity ab.
